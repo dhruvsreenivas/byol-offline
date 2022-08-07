@@ -1,0 +1,64 @@
+defaults:
+  - _self_
+  - task@_global_: ???
+  - learner@_global_: ???
+
+project_name: ???
+seed: 0
+model_dir: ./pretrained_wms
+level: med_exp
+
+# environment parameters
+img_size: 64
+frame_stack: 1
+action_repeat: 2
+
+# model training
+obs_shape: ???
+action_shape: ???
+model_train_epochs: 5000
+model_batch_size: 50
+seq_len: 50
+max_steps: 10000
+
+feature_dim: 200
+hidden_dim: 128
+
+# reward augmentations
+reward_aug: rnd
+
+# what to train
+load_model: false
+
+# policy training args
+policy_train_steps: 30000000
+num_initial_rand_steps: 2500
+policy_rb_capacity: 20000
+policy_batch_size: 256
+
+policy_eval_every: 10000
+num_eval_episodes: 10
+policy_save_every: 1000
+
+# logging
+wandb: true
+save_wm: true
+model_save_every: 100
+
+wm:
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  seq_len: ${seq_len}
+  gru_hidden_size: 256
+  depth: 32
+  seed: ${seed}
+  lr: 1e-3
+  ema: 0.99
+
+rnd:
+  hidden_dim: ${hidden_dim}
+  repr_dim: 50
+
+hydra:
+  run:
+    dir: ./local_runs/${now:%Y.%m.%d}/${now:%H%M%S}_${hydra.job.override_dirname}
