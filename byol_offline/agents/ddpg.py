@@ -358,8 +358,8 @@ class DDPG:
         
         # update critic target
         new_target_params = self.update_target(
-            self.train_state.critic_params,
-            self.train_state.critic_target_params
+            upd_train_state.critic_params,
+            upd_train_state.critic_target_params
         )
         
         self.train_state = DDPGTrainState(
