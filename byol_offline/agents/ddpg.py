@@ -29,7 +29,6 @@ class DDPG:
     '''DDPG agent from DrQv2 (without the data augmentations).'''
     def __init__(self, cfg, wm=None):
         self.cfg = cfg
-        # print(f'config stuff: {tuple(cfg.obs_shape), tuple(cfg.action_shape), cfg.feature_dim, cfg.hidden_dim, cfg.seed}')
         
         # encoder
         encoder_fn = lambda obs: DrQv2Encoder(cfg.obs_shape)(obs)
@@ -46,7 +45,7 @@ class DDPG:
         if wm is None or cfg.reward_aug == 'rnd':
             reward_aug_fn = lambda obs: RNDPredictor(cfg.rnd)(obs)
         else:
-            raise NotImplementedError('have not implemented BYOL-Explore reward penalty')
+            self.wm = wm
         
         self.reward_aug = hk.without_apply_rng(hk.transform(reward_aug_fn))
         self.target_reward_aug = hk.without_apply_rng(hk.transform(reward_aug_fn))

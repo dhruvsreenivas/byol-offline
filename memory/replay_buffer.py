@@ -115,7 +115,7 @@ def model_dataloader(buffer: SequenceReplayBuffer,
     
     return dataset.as_numpy_iterator()
 
-class PolicyReplayBuffer:
+class DrQReplayBuffer:
     '''Replay buffer similar to DrQv2 replay buffer.'''
     def __init__(self, capacity, obs_shape, action_shape):
         self._capacity = capacity
@@ -147,6 +147,16 @@ class PolicyReplayBuffer:
         rewards = self.rewards[idxes]
         next_obs = self.next_obs[idxes]
         dones = self.dones[idxes]
+        
+        return Transition(obs, actions, rewards, next_obs, dones)
+    
+    def sample_sequence(self, seq_len, batch_size):
+        idxes = np.random.randint(0, self.n - seq_len, batch_size)
+        obs = self.obs[idxes : idxes + seq_len]
+        actions = self.actions[idxes : idxes + seq_len]
+        rewards = self.rewards[idxes : idxes + seq_len]
+        next_obs = self.next_obs[idxes : idxes + seq_len]
+        dones = self.dones[idxes : idxes + seq_len]
         
         return Transition(obs, actions, rewards, next_obs, dones)
 

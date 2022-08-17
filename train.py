@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import jax
 from tqdm import tqdm
 from pathlib import Path
@@ -6,12 +9,11 @@ from hydra.utils import to_absolute_path
 from collections import defaultdict
 import wandb
 import datetime
-import numpy as np
 
 from byol_offline.models.wm import *
 from byol_offline.agents import *
 import envs.dmc as dmc
-from memory.replay_buffer import PolicyReplayBuffer, SequenceReplayBuffer, model_dataloader
+from memory.replay_buffer import DrQReplayBuffer, SequenceReplayBuffer, model_dataloader
 from utils import *
 
 class Workspace:
@@ -63,7 +65,7 @@ class Workspace:
         if self.cfg.load_model:
             model_path = self.pretrained_wm_dir / 'wm.pkl'
             self.wm_trainer.load(model_path)
-            
+        
         # WM dataloader
         buffer = SequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
         self.model_dataloader = model_dataloader(buffer, self.cfg.max_steps, self.cfg.model_batch_size)
@@ -72,11 +74,11 @@ class Workspace:
         if self.cfg.learner == 'ddpg':
             self.agent = DDPG(self.cfg)
             
-        self.policy_rb = PolicyReplayBuffer(self.cfg.policy_rb_capacity, self.cfg.obs_shape, self.cfg.action_shape)
+        self.policy_rb = DrQReplayBuffer(self.cfg.policy_rb_capacity, self.cfg.obs_shape, self.cfg.action_shape)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
-            
+
     def train_wm(self):
         for epoch in range(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
