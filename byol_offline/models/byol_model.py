@@ -3,15 +3,15 @@ import jax.numpy as jnp
 import haiku as hk
 import optax
 import dill
-from typing import Tuple, NamedTuple, List
+from typing import Tuple, NamedTuple
 import functools
 
-from byol_offline.networks.encoder import DreamerEncoder
+from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.rnn import *
-from byol_offline.reward_augs.byol import BYOLPredictor
-from byol_offline.models.wm_utils import *
+from byol_offline.networks.predictors import BYOLPredictor
+from byol_offline.models.byol_utils import *
 
-class WorldModelTrainState(NamedTuple):
+class BYOLTrainState(NamedTuple):
     wm_params: hk.Params
     target_params: hk.Params
     wm_opt_state: optax.OptState
@@ -22,7 +22,11 @@ class LatentWorldModel(hk.Module):
         self.cfg = cfg
         
         # nets
-        self.encoder = DreamerEncoder(cfg.obs_shape, cfg.depth)
+        if cfg.dreamer:
+            self.encoder = DreamerEncoder(cfg.obs_shape, cfg.depth)
+        else:
+            self.encoder = DrQv2Encoder(cfg.obs_shape)
+        
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
@@ -61,7 +65,6 @@ class WorldModelTrainer:
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
-        # really dumb that I have to make an entire new world model just to get the targets to update properly, but apparently jax.jit optimizes this
         wm_params = self.wm.init(k1, jnp.zeros((2, 1) + tuple(cfg.obs_shape)), jnp.zeros((2, 1) + tuple(cfg.action_shape)))
         target_params = self.wm.init(k2, jnp.zeros((2, 1) + tuple(cfg.obs_shape)), jnp.zeros((2, 1) + tuple(cfg.action_shape)))
         
@@ -69,11 +72,14 @@ class WorldModelTrainer:
         self.wm_opt = optax.adam(cfg.lr)
         wm_opt_state = self.wm_opt.init(wm_params)
         
-        self.train_state = WorldModelTrainState(wm_params=wm_params, target_params=target_params, wm_opt_state=wm_opt_state)
+        self.train_state = BYOLTrainState(
+            wm_params=wm_params,
+            target_params=target_params,
+            wm_opt_state=wm_opt_state
+        )
         
         self.ema = cfg.ema
     
-    # @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn_window_size(self,
                                wm_params: hk.Params,
                                target_params: hk.Params,
@@ -111,13 +117,12 @@ class WorldModelTrainer:
         
         return loss, mses_padded
     
-    # @functools.partial(jax.jit, static_argnames=('self'))
+    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn(self,
                    wm_params: hk.Params,
                    target_params: hk.Params,
                    obs_seq: jnp.ndarray,
                    action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        # print(f'input shapes: {obs_seq.shape, action_seq.shape}')
         seq_len = obs_seq.shape[0]
         total_loss = 0.0
         seq_mses = []
@@ -143,7 +148,7 @@ class WorldModelTrainer:
             'wm_loss': loss.item()
         }
         
-        self.train_state = WorldModelTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
+        self.train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
         return metrics
     
     def compute_uncertainty(self, obs_seq, action_seq, step):

@@ -1,12 +1,11 @@
 learner: ddpg
+
 # learning rates
 encoder_lr: 1e-4
 actor_lr: 1e-4
 critic_lr: 1e-4
-reward_aug_lr: 1e-4 # TODO: may change up
 
 # hyperparameters
-rnd_scale: 1.0
 reward_lambda: 0.5
 ema: 0.01
 init_std: 1.0

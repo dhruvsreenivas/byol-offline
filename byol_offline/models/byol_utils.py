@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 from typing import Optional
 import haiku as hk
-import functools
 
 def sliding_window(arr: jnp.ndarray, window_size: int) -> jnp.ndarray:
     '''Creates a sliding window, with shape 'window_size', that sweeps across the entire array along the first axis.'''

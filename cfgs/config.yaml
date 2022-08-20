@@ -7,13 +7,14 @@ project_name: ???
 seed: 0
 model_dir: ./pretrained_wms
 level: med_exp
+train_byol: true
 
 # environment parameters
 img_size: 64
 frame_stack: 1
 action_repeat: 2
 
-# model training
+# world model training + RND model training
 obs_shape: ???
 action_shape: ???
 model_train_epochs: 5000
@@ -23,6 +24,9 @@ max_steps: 10000
 
 feature_dim: 200
 hidden_dim: 128
+
+dreamer: true
+depth: 32
 
 # reward augmentations
 reward_aug: rnd
@@ -42,22 +46,30 @@ policy_save_every: 1000
 
 # logging
 wandb: true
-save_wm: true
+save_model: true
 model_save_every: 100
 
-wm:
+byol:
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
   seq_len: ${seq_len}
+  dreamer: ${dreamer}
+  depth: ${depth}
+
   gru_hidden_size: 256
-  depth: 32
   seed: ${seed}
   lr: 1e-3
   ema: 0.99
 
 rnd:
+  obs_shape: ${obs_shape}
+  dreamer: ${dreamer}
+  depth: ${depth}
+  seed: ${seed}
+
   hidden_dim: ${hidden_dim}
   repr_dim: 50
+  lr: 1e-3
 
 hydra:
   run:
