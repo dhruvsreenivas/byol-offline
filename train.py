@@ -94,8 +94,6 @@ class Workspace:
                 batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
                 
                 for k, v in batch_metrics.items():
-                    if epoch_metrics[k] is None:
-                        epoch_metrics[k] = AverageMeter()
                     epoch_metrics[k].update(v, obs.shape[0]) # want to log per example, not per batch avgs
                 
             if self.cfg.wandb:
@@ -115,8 +113,6 @@ class Workspace:
                 batch_metrics = self.rnd_trainer.update(obs, self.global_step)
                 
                 for k, v in batch_metrics.items():
-                    if epoch_metrics[k] is None:
-                        epoch_metrics[k] = AverageMeter()
                     epoch_metrics[k].update(v, obs.shape[0]) # want to log per example, not per batch avgs
             
             # print(epoch_metrics)
