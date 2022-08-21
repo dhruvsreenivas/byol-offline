@@ -26,6 +26,9 @@ class ClippedNormal(distrax.Normal):
         
         x = self.loc + eps
         return self._clamp(x)
+    
+def squashed_normal_dist(loc, scale):
+    return distrax.Transformed(distrax.Normal(loc, scale), distrax.Tanh())
 
 INITIALIZERS = {
     'xavier_uniform': hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),

@@ -1,4 +1,6 @@
+import jax
 import jax.numpy as jnp
+import haiku as hk
 
 class RMS(object):
     """running mean and std """
@@ -20,3 +22,7 @@ class RMS(object):
         self.n += bs
 
         return self.M, self.S
+    
+def update_target(params: hk.Params, target_params: hk.Params, ema: float):
+    target_params = jax.tree_util.tree_map(lambda x, y: ema * x + (1.0 - ema) * y, params, target_params)
+    return target_params

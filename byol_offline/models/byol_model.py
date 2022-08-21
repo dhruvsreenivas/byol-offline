@@ -30,7 +30,10 @@ class LatentWorldModel(hk.Module):
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
-        self.predictor = BYOLPredictor(4096)
+        if cfg.dreamer:
+            self.predictor = BYOLPredictor(4096)
+        else:
+            self.predictor = BYOLPredictor(20000)
         
     def __call__(self, obs, actions):
         # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
