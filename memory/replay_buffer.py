@@ -146,7 +146,7 @@ def transpose_fn(obs, action):
     action = tf.transpose(action, (1, 0, 2))
     return obs, action
 
-def model_dataloader(buffer: SequenceReplayBuffer,
+def byol_dataloader(buffer: SequenceReplayBuffer,
                      max_steps,
                      batch_size,
                      prefetch=True):
@@ -198,7 +198,7 @@ if __name__ == '__main__':
     
     rb = SequenceReplayBuffer(data_dir, seq_len)
     print('rb created')
-    dataloader = model_dataloader(rb, max_steps=200, batch_size=20)
+    dataloader = byol_dataloader(rb, max_steps=200, batch_size=20)
     print('dataloader created')
     
     batch = next(dataloader)

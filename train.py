@@ -61,13 +61,13 @@ class Workspace:
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
         if self.cfg.load_model:
-            model_path = self.pretrained_model_dir / 'rnd.pkl'
+            model_path = self.pretrained_model_dir / 'rnd_5000.pkl' # TODO: don't hardcore
             self.rnd_trainer.load(model_path)
            
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
         if self.cfg.load_model:
-            model_path = self.pretrained_model_dir / 'byol.pkl'
+            model_path = self.pretrained_model_dir / 'byol_5000.pkl' # TODO: don't hardcore
             self.byol_trainer.load(model_path)
             
         # RND dataloader
@@ -76,11 +76,13 @@ class Workspace:
         
         # BYOL dataloader
         byol_buffer = SequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
-        self.byol_dataloader = model_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # policy
         if self.cfg.learner == 'ddpg':
             self.agent = DDPG(self.cfg, self.byol_trainer, self.rnd_trainer)
+        else:
+            self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
@@ -115,7 +117,6 @@ class Workspace:
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, obs.shape[0]) # want to log per example, not per batch avgs
             
-            # print(epoch_metrics)
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
@@ -123,6 +124,28 @@ class Workspace:
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
                 model_path = self.pretrained_model_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
+                
+    def eval_agent(self):
+        episode_rewards = []
+        for _ in range(self.cfg.n_eval_episodes):
+            ob = self.eval_env.reset()
+            done = False
+            episode_reward = 0.0
+            while not done:
+                action = self.agent.act(ob, self.global_step, eval_mode=True)
+                n_ob, r, done, _ = self.eval_env.step(action)
+                episode_reward += r
+                
+                ob = n_ob
+                
+            episode_rewards.append(episode_reward)
+            
+        metrics = {
+            'eval_rew_mean': np.mean(episode_rewards),
+            'eval_rew_std': np.std(episode_rewards)
+        }
+        if self.cfg.wandb:
+            wandb.log(metrics)
                 
     def train_agent(self):
         '''Train offline RL agent.'''

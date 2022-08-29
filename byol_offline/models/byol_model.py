@@ -99,7 +99,6 @@ class WorldModelTrainer:
         # reshape to (window_size, B * num_seqs, *dims)
         obs_window = jnp.reshape(obs_window, (window_size, -1) + obs_window.shape[3:])
         action_window = jnp.reshape(action_window, (window_size, -1) + action_window.shape[3:])
-        # print(f'window reshaped shapes: {obs_window.shape, action_window.shape}')
         
         pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
         pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
@@ -126,6 +125,7 @@ class WorldModelTrainer:
                    target_params: hk.Params,
                    obs_seq: jnp.ndarray,
                    action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        '''Can't JAX JIT easily due to sliding windows being dynamically shaped. Therefore, manual Python for loop is required :('''
         seq_len = obs_seq.shape[0]
         total_loss = 0.0
         seq_mses = []

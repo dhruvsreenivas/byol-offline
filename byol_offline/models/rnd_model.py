@@ -93,7 +93,7 @@ class RNDModelTrainer:
         online_output = self.rnd.apply(self.train_state.params, obs)
         target_output = self.rnd.apply(self.train_state.target_params, obs)
         
-        squared_diff = jnp.square(target_output - online_output)
+        squared_diff = jnp.square(target_output - online_output).sum(-1)
         return jax.lax.stop_gradient(squared_diff)
     
     def save(self, model_path):
