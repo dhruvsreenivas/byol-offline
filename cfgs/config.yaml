@@ -5,7 +5,6 @@ defaults:
 
 project_name: ???
 seed: 0
-model_dir: ./pretrained_wms
 level: med_exp
 train_byol: true
 
@@ -40,6 +39,7 @@ num_initial_rand_steps: 2500
 policy_rb_capacity: 20000
 policy_batch_size: 256
 
+# policy evaluation args
 policy_eval_every: 10000
 num_eval_episodes: 10
 policy_save_every: 1000
