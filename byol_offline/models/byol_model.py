@@ -10,7 +10,7 @@ from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
-from envs.gym_utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS
 
 class BYOLTrainState(NamedTuple):
     wm_params: hk.Params

@@ -8,7 +8,7 @@ from typing import NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
-from envs.gym_utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS
 
 class RNDTrainState(NamedTuple):
     params: hk.Params
