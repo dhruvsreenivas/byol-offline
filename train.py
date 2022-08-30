@@ -41,22 +41,29 @@ class Workspace:
         self.policy_dir = Path(to_absolute_path('trained_policies')) / self.cfg.task / self.cfg.level
         self.policy_dir.mkdir(parents=True, exist_ok=True)
         
-        self.train_env = dmc.make(
-            self.cfg.task,
-            self.cfg.frame_stack,
-            self.cfg.action_repeat,
-            self.cfg.seed,
-            self.cfg.img_size
-        )
-        self.eval_env = dmc.make(
-            self.cfg.task,
-            self.cfg.frame_stack,
-            self.cfg.action_repeat,
-            self.cfg.seed,
-            self.cfg.img_size
-        )
-        self.cfg.obs_shape = self.train_env.observation_spec().shape
-        self.cfg.action_shape = self.train_env.action_spec().shape
+        if self.cfg.task in MUJOCO_ENVS:
+            self.train_env = make_gym_env(self.cfg.task)
+            self.eval_env = make_gym_env(self.cfg.task)
+            
+            self.cfg.obs_shape = self.train_env.observation_space.shape[0]
+            self.cfg.action_shape = self.train_env.action_space.shape[0]
+        else:
+            self.train_env = dmc.make(
+                self.cfg.task,
+                self.cfg.frame_stack,
+                self.cfg.action_repeat,
+                self.cfg.seed,
+                self.cfg.img_size
+            )
+            self.eval_env = dmc.make(
+                self.cfg.task,
+                self.cfg.frame_stack,
+                self.cfg.action_repeat,
+                self.cfg.seed,
+                self.cfg.img_size
+            )
+            self.cfg.obs_shape = self.train_env.observation_spec().shape
+            self.cfg.action_shape = self.train_env.action_spec().shape
         
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
@@ -71,11 +78,11 @@ class Workspace:
             self.byol_trainer.load(model_path)
             
         # RND dataloader
-        rnd_buffer = TransitionReplayBuffer(self.offline_dir)
+        rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir)
         self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # BYOL dataloader
-        byol_buffer = SequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
+        byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
         self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # policy

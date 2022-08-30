@@ -50,26 +50,42 @@ save_model: true
 model_save_every: 100
 
 byol:
-  obs_shape: ${obs_shape}
-  action_shape: ${action_shape}
-  seq_len: ${seq_len}
-  dreamer: ${dreamer}
-  depth: ${depth}
+  task: ${task}
+  vd4rl:
+    obs_shape: ${obs_shape}
+    action_shape: ${action_shape}
+    seq_len: ${seq_len}
+    dreamer: ${dreamer}
+    depth: ${depth}
 
-  gru_hidden_size: 256
-  seed: ${seed}
-  lr: 1e-3
-  ema: 0.99
+    gru_hidden_size: 256
+    seed: ${seed}
+    lr: 1e-3
+    ema: 0.99
+  
+  d4rl:
+    obs_shape: ${obs_shape}
+    action_shape: ${action_shape}
+    seq_len: ${seq_len}
+    hidden_dim: 512
+    repr_dim: 128
+
+    gru_hidden_size: 64
+    seed: ${seed}
+    lr: 1e-3
+    ema: 0.99
 
 rnd:
-  obs_shape: ${obs_shape}
-  dreamer: ${dreamer}
-  depth: ${depth}
-  seed: ${seed}
+  task: ${task}
+  vd4rl:
+    obs_shape: ${obs_shape}
+    dreamer: ${dreamer}
+    depth: ${depth}
+    seed: ${seed}
 
-  hidden_dim: ${hidden_dim}
-  repr_dim: 50
-  lr: 1e-3
+    hidden_dim: ${hidden_dim}
+    repr_dim: 50
+    lr: 1e-3
 
 hydra:
   run:

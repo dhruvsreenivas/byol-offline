@@ -1,7 +1,9 @@
+from typing import Sequence
 import numpy as np
 import io
 import traceback
 import random
+from utils import get_gym_dataset
 
 # tensorflow dataset utilities
 import tensorflow as tf
@@ -28,7 +30,7 @@ def load_episode(fn, relevant_keys):
         episode = {k: episode[k] for k in relevant_keys}
         return episode
 
-class SequenceReplayBuffer:
+class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
     def __init__(self, data_dir, seq_len):
         self._data_dir = data_dir
@@ -79,7 +81,7 @@ class SequenceReplayBuffer:
         
         return obs, action
     
-class TransitionReplayBuffer:
+class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
     def __init__(self, data_dir):
         self._data_dir = data_dir
@@ -131,6 +133,36 @@ class TransitionReplayBuffer:
         done = episode['is_terminal'][idx]
         
         return obs, action, reward, next_obs, done
+    
+class D4RLSequenceReplayBuffer:
+    def __init__(self, env_name, capability, seq_len):
+        self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
+        self.n_samples = self.dataset['observations'].shape[0]
+        self._seq_len = seq_len
+        
+    def _sample(self):
+        # sampling full sequence
+        idx = np.random.randint(0, self.n_samples - self._seq_len) # TODO: figure out how to pad for more data
+        obs = self.dataset['observations'][idx : idx + self._seq_len]
+        action = self.dataset['actions'][idx : idx + self._seq_len]
+        reward = self.dataset['rewards'][idx : idx + self._seq_len]
+        next_obs = self.dataset['next_observations'][idx : idx + self._seq_len]
+        done = self.dataset['terminals'][idx : idx + self._seq_len]
+        
+        return obs, action, reward, next_obs, done
+
+class D4RLTransitionReplayBuffer:
+    def __init__(self, env_name, capability):
+        self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
+        self.n_samples = self.dataset['observations'].shape[0]
+        
+    def _sample(self):
+        # sampling single item
+        idx = np.random.randint(0, self.n_samples) # TODO: figure out how to pad for more data
+        obs = self.dataset['observations'][idx]
+        action = self.dataset['actions'][idx]
+        
+        return obs, action
         
 def generator_fn(buffer, max_steps=None):
     if max_steps is not None:
@@ -140,13 +172,19 @@ def generator_fn(buffer, max_steps=None):
         while True:
             yield buffer._sample()
             
-def transpose_fn(obs, action):
+def transpose_fn_img(obs, action):
     '''Switches from (B, T, H, W, C) to (T, B, H, W, C).'''
     obs = tf.transpose(obs, (1, 0, 2, 3, 4))
     action = tf.transpose(action, (1, 0, 2))
     return obs, action
 
-def byol_dataloader(buffer: SequenceReplayBuffer,
+def transpose_fn_state(obs, action):
+    '''Switches from (B, T, dim) to (T, B, dim)'''
+    obs = tf.transpose(obs, (1, 0, 2))
+    action = tf.transpose(action, (1, 0, 2))
+    return obs, action
+
+def byol_dataloader(buffer,
                      max_steps,
                      batch_size,
                      prefetch=True):
@@ -159,13 +197,16 @@ def byol_dataloader(buffer: SequenceReplayBuffer,
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
     
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.map(transpose_fn)
+    if isinstance(buffer, VD4RLSequenceReplayBuffer):
+        dataset = dataset.map(transpose_fn_img)
+    else:
+        dataset = dataset.map(transpose_fn_state)
     if prefetch:
         dataset = dataset.prefetch(10)
     
     return dataset.as_numpy_iterator()
 
-def rnd_dataloader(buffer: TransitionReplayBuffer,
+def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
                    max_steps,
                    batch_size,
                    prefetch=True):
@@ -196,7 +237,7 @@ if __name__ == '__main__':
     data_dir = Path('../offline_data/cheetah_run/med_exp')
     seq_len = 50
     
-    rb = SequenceReplayBuffer(data_dir, seq_len)
+    rb = VD4RLSequenceReplayBuffer(data_dir, seq_len)
     print('rb created')
     dataloader = byol_dataloader(rb, max_steps=200, batch_size=20)
     print('dataloader created')

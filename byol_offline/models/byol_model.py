@@ -10,16 +10,17 @@ from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
+from envs.gym_utils import MUJOCO_ENVS
 
 class BYOLTrainState(NamedTuple):
     wm_params: hk.Params
     target_params: hk.Params
     wm_opt_state: optax.OptState
 
-class LatentWorldModel(hk.Module):
+class ConvLatentWorldModel(hk.Module):
+    '''Latent world model for DMC tasks. Primarily inspired by DreamerV2 and DrQv2 repositories.'''
     def __init__(self, cfg):
         super().__init__()
-        self.cfg = cfg
         
         # nets
         if cfg.dreamer:
@@ -56,12 +57,55 @@ class LatentWorldModel(hk.Module):
         
         pred_latents = jnp.concatenate([latent, latents])
         return pred_latents, embeddings
+
+class MLPLatentWorldModel(hk.Module):
+    '''Latent world model for D4RL tasks. Primarily inspired by MOPO repository.'''
+    def __init__(self, cfg):
+        super().__init__()
+        
+        # nets
+        self.encoder = hk.nets.MLP(
+            [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.repr_dim],
+            activation=jax.nn.swish
+        )
+        
+        self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
+        self.open_gru = hk.GRU(cfg.gru_hidden_size)
+        
+        self.predictor = BYOLPredictor(cfg.repr_dim)
+    
+    def __call__(self, obs, actions):
+        # obs should be of shape (T, B, obs_dim), actions of shape (T, B, action_dim)
+        # first get embeddings
+        T, B = obs.shape[0], obs.shape[1]
+        obs = jnp.reshape(obs, (-1,) + obs.shape[2:])
+        embeddings = self.encoder(obs)
+        embeddings = jnp.reshape(embeddings, (T, -1) + embeddings.shape[1:]) # (T, B, embed_dim)
+        state = self.closed_gru.initial_state(B)
+        
+        embedding, action = embeddings[0], actions[0]
+        state, _ = self.closed_gru(embedding, action, state)
+        latent = self.predictor(state)
+        latent = jnp.expand_dims(latent, 0)
+        
+        states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state)
+        states = jnp.reshape(states, (-1,) + states.shape[2:])
+        latents = self.predictor(states)
+        latents = jnp.reshape(latents, (-1, B) + latents.shape[1:])
+        
+        pred_latents = jnp.concatenate([latent, latents])
+        return pred_latents, embeddings
     
 class WorldModelTrainer:
+    '''World model trainer for DMC tasks.'''
     def __init__(self, cfg):
         self.cfg = cfg
         
-        wm_fn = lambda o, a: LatentWorldModel(cfg)(o, a)
+        if cfg.task in MUJOCO_ENVS:
+            wm_fn = lambda o, a: MLPLatentWorldModel(cfg.d4rl)(o, a)
+        else:
+            wm_fn = lambda o, a: ConvLatentWorldModel(cfg.vd4rl)(o, a)
+        
         self.wm = hk.without_apply_rng(hk.transform(wm_fn))
         
         # params (make sure to initialize phi correctly)

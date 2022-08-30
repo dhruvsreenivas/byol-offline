@@ -8,16 +8,16 @@ from typing import NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
+from envs.gym_utils import MUJOCO_ENVS
 
 class RNDTrainState(NamedTuple):
     params: hk.Params
     target_params: hk.Params
     opt_state: optax.OptState
     
-class RNDModel(hk.Module):
+class ConvRNDModel(hk.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.cfg = cfg
     
         # nets
         if cfg.dreamer:
@@ -31,12 +31,32 @@ class RNDModel(hk.Module):
         # Observations are expected to be of size (B, H, W, C)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
+
+class MLPRNDModel(hk.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        
+        # net
+        self.encoder = hk.nets.MLP(
+            [cfg.hidden_dim, cfg.hidden_dim],
+            activation=jax.nn.swish
+        )
+        
+        self.predictor = RNDPredictor(cfg)
+    
+    def __call__(self, obs):
+        reprs = self.encoder(obs)
+        return self.predictor(reprs)
     
 class RNDModelTrainer:
     def __init__(self, cfg):
         self.cfg = cfg
         
-        rnd_fn = lambda obs: RNDModel(cfg)(obs)
+        if cfg.task in MUJOCO_ENVS:
+            rnd_fn = lambda obs: MLPRNDModel(cfg.d4rl)(obs)
+        else:
+            rnd_fn = lambda obs: ConvRNDModel(cfg.vd4rl)(obs)
+        
         self.rnd = hk.without_apply_rng(hk.transform(rnd_fn))
         
         # params

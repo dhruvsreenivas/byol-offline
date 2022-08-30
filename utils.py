@@ -1,3 +1,6 @@
+import gym
+import d4rl
+
 class Until:
     def __init__(self, until, action_repeat=1):
         self._until = until
@@ -34,3 +37,26 @@ class AverageMeter(object):
 
     def value(self):
         return self._sum / max(1, self._count)
+
+# ================ GYM UTILS ================
+
+MUJOCO_ENVS = {
+    'halfcheetah': 'HalfCheetah-v2',
+    'ant': 'Ant-v2',
+    'hopper': 'Hopper-v2',
+    'walker': 'Walker2d-v2'
+}
+
+LEVELS = ['random', 'medium', 'expert', 'medium-replay', 'medium-expert']
+
+def make_gym_env(name):
+    env_name = MUJOCO_ENVS[name]
+    return gym.make(env_name)
+
+def get_gym_dataset(name, capability, q_learning=True):
+    assert capability in LEVELS, "Not a proper level -- can't load the dataset."
+    env_name = name + '-' + capability + '-v2'
+    env = gym.make(env_name)
+    if q_learning:
+        return d4rl.qlearning_dataset(env)
+    return env.get_dataset()
