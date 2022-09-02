@@ -3,11 +3,6 @@ import jax.numpy as jnp
 from typing import Optional
 import haiku as hk
 
-def sliding_window(arr: jnp.ndarray, window_size: int) -> jnp.ndarray:
-    '''Creates a sliding window, with shape 'window_size', that sweeps across the entire array along the first axis.'''
-    idx = jnp.arange(arr.shape[0] - window_size + 1)[:, None] + jnp.arange(window_size)[None, :]
-    return arr[idx]
-
 def l2_normalize(x: jnp.ndarray, axis: Optional[int] = None, epsilon: float=1e-12) -> jnp.ndarray:
     '''Stable L2 normalization from BYOL repo.'''
     square_sum = jnp.sum(jnp.square(x), axis=axis, keepdims=True)
@@ -27,6 +22,17 @@ def pad_sliding_windows(arr: jnp.ndarray, seq_len: int) -> jnp.ndarray:
     roll_amts = jnp.arange(arr.shape[0])
     column_indices = column_indices - roll_amts[:, jnp.newaxis]
     return arr[rows, column_indices, :]
+
+def sliding_window(arr, idx, window_size):
+    '''Get the relevant mask for given array, starting at index, with specific window size.'''
+    ndims = jnp.ndim(arr)
+    mask = jnp.arange(arr.shape[0])
+    mask = jnp.expand_dims(mask, axis=range(1, ndims))
+    mask = jnp.tile(mask, (1,) + arr.shape[1:])
+    mask = (mask >= idx) * (mask < idx + window_size)
+    
+    masked_arr = jnp.where(mask, arr, 0)
+    return masked_arr
 
 def target_update_fn(params: hk.Params, target_params: hk.Params, ema: float) -> hk.Params:
     new_target_params = jax.tree_util.tree_map(lambda x, y: ema * x + (1.0 - ema) * y, target_params, params)

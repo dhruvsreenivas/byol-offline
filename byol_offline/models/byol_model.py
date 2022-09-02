@@ -140,25 +140,26 @@ class WorldModelTrainer:
         @functools.partial(jax.jit, static_argnums=1)
         def body_fn(curr_state, idx):
             curr_loss, curr_loss_window = curr_state
-            # get window starting from idx onward of obs, action
-            obs_window = obs_seq[idx : idx + window_size] # (ws, B, *obs_dims)
-            action_window = action_seq[idx : idx + window_size] # (ws, B, action_dim)
             
-            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (ws, B, embed_dim)
-            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:])
+            # get window starting from idx onward of obs, action by masking out the irrelevant parts
+            obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s
+            action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s
+            
+            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (T, B, embed_dim)
+            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            _, target_latents = self.wm.apply(target_params, obs_window, action_window)
-            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:])
+            _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
+            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
             
             # normalize latents
-            latents = l2_normalize(latents)
-            embeddings = l2_normalize(embeddings)
+            latents = l2_normalize(latents, axis=-1)
+            embeddings = l2_normalize(embeddings, axis=-1)
 
             # take L2 loss
-            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (ws * B, embed_dim)
+            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
-            loss_vec = jnp.sum(mses, -1) # (ws, B)
-            new_loss_window = curr_loss_window.at[idx : idx + window_size].add(loss_vec)
+            loss_vec = jnp.sum(mses, -1) # (T, B)
+            new_loss_window = curr_loss_window + loss_vec
 
             return (curr_loss + loss_vec.mean(), new_loss_window), 0 # dummy stuff here
 
