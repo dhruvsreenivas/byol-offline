@@ -55,7 +55,7 @@ class ConvLatentWorldModel(hk.Module):
         latents = self.predictor(states)
         latents = jnp.reshape(latents, (-1, B) + latents.shape[1:])
         
-        pred_latents = jnp.concatenate([latent, latents])
+        pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
         return pred_latents, embeddings
 
 class MLPLatentWorldModel(hk.Module):
@@ -133,52 +133,54 @@ class WorldModelTrainer:
                                obs_seq: jnp.ndarray,
                                action_seq: jnp.ndarray,
                                window_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        seq_len = obs_seq.shape[0]
         
-        obs_window = sliding_window(obs_seq, window_size).transpose(1, 0, 2, 3, 4, 5) # (window_size, num_seqs, B, 64, 64, 3)
-        action_window = sliding_window(action_seq, window_size).transpose(1, 0, 2, 3) # (window_size, num_seqs, B, action_dim)
-        num_seqs = action_window.shape[1]
-        B = action_window.shape[2]
-        
-        # reshape to (window_size, B * num_seqs, *dims)
-        obs_window = jnp.reshape(obs_window, (window_size, -1) + obs_window.shape[3:])
-        action_window = jnp.reshape(action_window, (window_size, -1) + action_window.shape[3:])
-        
-        pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
-        pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
-        
-        _, target_latents = self.wm.apply(target_params, obs_window, action_window)
-        target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
-        
-        # normalize latents
-        pred_latents = l2_normalize(pred_latents, axis=-1)
-        target_latents = l2_normalize(target_latents, axis=-1)
-        
-        mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (window_size * B * num_seqs, embed_dim)
-        loss = jnp.sum(mses, -1).mean()
-        
-        # take mean along the embedding dim
-        mses = jnp.reshape(jnp.sum(mses, -1), (num_seqs, window_size, B))
-        mses_padded = pad_sliding_windows(mses, seq_len)
-        
-        return loss, mses_padded
+        T, B = obs_seq.shape[:2]
+
+        # define body function for given starting index 'idx' that goes into jax.lax.scan
+        @functools.partial(jax.jit, static_argnums=1)
+        def body_fn(curr_state, idx):
+            curr_loss, curr_loss_window = curr_state
+            # get window starting from idx onward of obs, action
+            obs_window = obs_seq[idx : idx + window_size] # (ws, B, *obs_dims)
+            action_window = action_seq[idx : idx + window_size] # (ws, B, action_dim)
+            
+            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (ws, B, embed_dim)
+            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:])
+
+            _, target_latents = self.wm.apply(target_params, obs_window, action_window)
+            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:])
+            
+            # normalize latents
+            latents = l2_normalize(latents)
+            embeddings = l2_normalize(embeddings)
+
+            # take L2 loss
+            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (ws * B, embed_dim)
+            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
+            loss_vec = jnp.sum(mses, -1) # (ws, B)
+            new_loss_window = curr_loss_window.at[idx : idx + window_size].add(loss_vec)
+
+            return (curr_loss + loss_vec.mean(), new_loss_window), 0 # dummy stuff here
+
+        init_val = (0.0, jnp.zeros((T, B)))
+        (total_loss, loss_window), _ = jax.lax.scan(body_fn, init_val, jnp.arange(T - window_size))
+        return total_loss, loss_window
     
-    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn(self,
                    wm_params: hk.Params,
                    target_params: hk.Params,
                    obs_seq: jnp.ndarray,
                    action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        '''Can't JAX JIT easily due to sliding windows being dynamically shaped. Therefore, manual Python for loop is required :('''
-        seq_len = obs_seq.shape[0]
-        total_loss = 0.0
-        seq_mses = []
-        for window_size in range(1, seq_len + 1):
-            loss, mses_padded = self.wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, window_size)
-            total_loss += loss
-            seq_mses.append(mses_padded)
-        seq_mses = jnp.concatenate(seq_mses, axis=0) # size (sum(num_seqs), seq_len, B), dimensions are: (all starting idxs/window sizes, transition we care about, batch_size)
-        return total_loss / seq_len, jax.lax.stop_gradient(seq_mses)
+        
+        T, B = obs_seq.shape[:2]
+        def ws_body_fn(curr_state, ws):
+            curr_loss, curr_loss_window = curr_state
+            loss, loss_window = self.wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, ws)
+            return curr_loss + loss, curr_loss_window + loss_window
+        
+        init_state = (0.0, jnp.zeros((T, B)))
+        total_loss, total_loss_window = jax.lax.scan(ws_body_fn, init_state, xs=jnp.arange(1, T+1))
+        return total_loss / T, total_loss_window / T # take avgs
     
     def update(self, obs, actions, step):
         del step
@@ -207,10 +209,9 @@ class WorldModelTrainer:
         :return uncertainties: Model uncertainties, of shape (seq_len, B).
         '''
         del step
-        _, mses = self.wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
-        # mses are of shape (sum(num_seqs), seq_len, B)
-        mses = jnp.mean(mses, axis=0) # take mean across all starting positions and all window sizes, (seq_len, B)
-        return mses
+        _, losses = self.wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
+        # losses are of shape (T, B), result of loss accumulation
+        return losses
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:
