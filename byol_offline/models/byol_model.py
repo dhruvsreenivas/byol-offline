@@ -140,16 +140,18 @@ class WorldModelTrainer:
         # define body function for given starting index 'idx' that goes into jax.lax.scan
         def body_fn(idx: int, curr_state: Tuple[float, jnp.ndarray]):
             curr_loss, curr_loss_window = curr_state
-            
+
             # get window starting from idx onward of obs, action by masking out the irrelevant parts
-            obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s
-            action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s
+            obs_mask = sliding_window_mask(obs_seq, idx, window_size)
+            action_mask = sliding_window_mask(action_seq, idx, window_size)
+            obs_window = jnp.where(obs_mask, obs_seq, 0) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s
+            action_window = jnp.where(action_mask, action_seq, 0) # (T, B, action_dim), everything except [idx:idx+window_size] 0s
             
             pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (T, B, embed_dim)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
-            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
+            _, target_latents = self.wm.apply(target_params, obs_window, action_window)
+            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:])
             
             # normalize latents
             pred_latents = l2_normalize(pred_latents, axis=-1)
@@ -158,14 +160,15 @@ class WorldModelTrainer:
             # take L2 loss
             mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
-            mses = sliding_window(mses, idx, window_size) # to get 0 losses for indices not in window
+            mses_mask = sliding_window_mask(mses, idx, window_size) # to get 0 losses for indices not in window
+            mses = jnp.where(mses_mask, mses, 0)
             loss_vec = jnp.sum(mses, -1) # (T, B)
             new_loss_window = curr_loss_window + loss_vec
 
             return curr_loss + loss_vec.mean(), new_loss_window
 
         init_val = (0.0, jnp.zeros((T, B)))
-        total_loss, loss_window = jax.lax.fori_loop(0, T, body_fn, init_val)
+        total_loss, loss_window = jax.lax.fori_loop(0, T - 1, body_fn, init_val)
         return total_loss, loss_window
     
     @functools.partial(jax.jit, static_argnames=('self'))
