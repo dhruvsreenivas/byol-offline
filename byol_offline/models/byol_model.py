@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import haiku as hk
 import optax
 import dill
@@ -137,8 +138,7 @@ class WorldModelTrainer:
         T, B = obs_seq.shape[:2]
 
         # define body function for given starting index 'idx' that goes into jax.lax.scan
-        @functools.partial(jax.jit, static_argnums=1)
-        def body_fn(curr_state, idx):
+        def body_fn(idx: int, curr_state: Tuple[float, jnp.ndarray]):
             curr_loss, curr_loss_window = curr_state
             
             # get window starting from idx onward of obs, action by masking out the irrelevant parts
@@ -152,21 +152,23 @@ class WorldModelTrainer:
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
             
             # normalize latents
-            latents = l2_normalize(latents, axis=-1)
-            embeddings = l2_normalize(embeddings, axis=-1)
+            pred_latents = l2_normalize(pred_latents, axis=-1)
+            target_latents = l2_normalize(target_latents, axis=-1)
 
             # take L2 loss
             mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
+            mses = sliding_window(mses, idx, window_size) # to get 0 losses for indices not in window
             loss_vec = jnp.sum(mses, -1) # (T, B)
             new_loss_window = curr_loss_window + loss_vec
 
-            return (curr_loss + loss_vec.mean(), new_loss_window), 0 # dummy stuff here
+            return curr_loss + loss_vec.mean(), new_loss_window
 
         init_val = (0.0, jnp.zeros((T, B)))
-        (total_loss, loss_window), _ = jax.lax.scan(body_fn, init_val, jnp.arange(T - window_size))
+        total_loss, loss_window = jax.lax.fori_loop(0, T, body_fn, init_val)
         return total_loss, loss_window
     
+    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn(self,
                    wm_params: hk.Params,
                    target_params: hk.Params,
@@ -174,13 +176,14 @@ class WorldModelTrainer:
                    action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         
         T, B = obs_seq.shape[:2]
-        def ws_body_fn(curr_state, ws):
+
+        def ws_body_fn(ws, curr_state):
             curr_loss, curr_loss_window = curr_state
             loss, loss_window = self.wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, ws)
             return curr_loss + loss, curr_loss_window + loss_window
         
         init_state = (0.0, jnp.zeros((T, B)))
-        total_loss, total_loss_window = jax.lax.scan(ws_body_fn, init_state, xs=jnp.arange(1, T+1))
+        total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
         return total_loss / T, total_loss_window / T # take avgs
     
     def update(self, obs, actions, step):
@@ -195,7 +198,7 @@ class WorldModelTrainer:
         new_target_params = target_update_fn(new_params, self.train_state.target_params, self.ema)
         
         metrics = {
-            'wm_loss': loss.item()
+            'wm_loss': loss.astype(np.float32)
         }
         
         self.train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)

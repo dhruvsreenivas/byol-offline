@@ -110,7 +110,7 @@ class Workspace:
                 wandb.log(log_dump)
             
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
-                model_path = self.pretrained_model_dir / f'wm_{epoch}.pkl'
+                model_path = self.pretrained_model_dir / f'byol_{epoch}.pkl'
                 self.byol_trainer.save(model_path)
                 
     def train_rnd(self):

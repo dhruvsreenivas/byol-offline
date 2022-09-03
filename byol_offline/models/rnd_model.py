@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import haiku as hk
 import optax
 import dill
@@ -94,7 +95,7 @@ class RNDModelTrainer:
         new_params = optax.apply_updates(self.train_state.params, update)
         
         metrics = {
-            'rnd_loss': loss.item()
+            'rnd_loss': loss.astype(np.float32)
         }
         
         self.train_state = RNDTrainState(
