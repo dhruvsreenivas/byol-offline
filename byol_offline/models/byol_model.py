@@ -157,14 +157,15 @@ class WorldModelTrainer:
             # take L2 loss
             mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
-            mses = sliding_window(mses, idx, window_size) # to get 0 losses for indices not in window
+            mses_mask = sliding_window(mses, idx, window_size) # to get 0 losses for indices not in window
+            mses = jnp.where(mses_mask, mses, 0)
             loss_vec = jnp.sum(mses, -1) # (T, B)
             new_loss_window = curr_loss_window + loss_vec
 
             return curr_loss + loss_vec.mean(), new_loss_window
 
         init_val = (0.0, jnp.zeros((T, B)))
-        total_loss, loss_window = jax.lax.fori_loop(0, T, body_fn, init_val)
+        total_loss, loss_window = jax.lax.fori_loop(0, T - 1, body_fn, init_val)
         return total_loss, loss_window
     
     @functools.partial(jax.jit, static_argnames=('self'))
