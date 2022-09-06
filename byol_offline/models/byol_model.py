@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import haiku as hk
 import optax
 import dill
@@ -128,6 +127,7 @@ class WorldModelTrainer:
         
         self.ema = cfg.ema
     
+    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn_window_size(self,
                                wm_params: hk.Params,
                                target_params: hk.Params,
@@ -141,13 +141,12 @@ class WorldModelTrainer:
         def body_fn(idx: int, curr_state: Tuple[float, jnp.ndarray]):
             curr_loss, curr_loss_window = curr_state
             
-            # get window starting from idx onward of obs, action by masking out the irrelevant parts
             obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s
             action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s
             
             pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (T, B, embed_dim)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
-
+            
             _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
             
@@ -198,7 +197,7 @@ class WorldModelTrainer:
         new_target_params = target_update_fn(new_params, self.train_state.target_params, self.ema)
         
         metrics = {
-            'wm_loss': loss.astype(np.float32)
+            'wm_loss': loss.item()
         }
         
         self.train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)

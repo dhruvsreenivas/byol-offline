@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import haiku as hk
 import optax
 import dill
@@ -95,7 +94,7 @@ class RNDModelTrainer:
         new_params = optax.apply_updates(self.train_state.params, update)
         
         metrics = {
-            'rnd_loss': loss.astype(np.float32)
+            'rnd_loss': loss.item()
         }
         
         self.train_state = RNDTrainState(
@@ -108,6 +107,7 @@ class RNDModelTrainer:
     
     @functools.partial(jax.jit, static_argnames=('self'))
     def compute_uncertainty(self, obs, actions, step):
+        '''Computes RND uncertainty bonus.'''
         del step
         del actions
         

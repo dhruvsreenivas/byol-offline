@@ -30,7 +30,8 @@ class Workspace:
     
     def setup(self):
         # offline directory
-        self.offline_dir = Path(to_absolute_path('offline_data')) / self.cfg.task / self.cfg.level
+        if self.cfg.task not in MUJOCO_ENVS:
+            self.offline_dir = Path(to_absolute_path('offline_data')) / self.cfg.task / self.cfg.level
         
         # world model directory
         final_dir = 'byol' if self.cfg.train_byol else 'rnd'
@@ -45,8 +46,8 @@ class Workspace:
             self.train_env = make_gym_env(self.cfg.task)
             self.eval_env = make_gym_env(self.cfg.task)
             
-            self.cfg.obs_shape = self.train_env.observation_space.shape[0]
-            self.cfg.action_shape = self.train_env.action_space.shape[0]
+            self.cfg.obs_shape = self.train_env.observation_space.shape
+            self.cfg.action_shape = self.train_env.action_space.shape
         else:
             self.train_env = dmc.make(
                 self.cfg.task,
@@ -70,7 +71,7 @@ class Workspace:
         if self.cfg.load_model:
             model_path = self.pretrained_model_dir / 'rnd_5000.pkl' # TODO: don't hardcore
             self.rnd_trainer.load(model_path)
-           
+
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
         if self.cfg.load_model:
@@ -78,11 +79,19 @@ class Workspace:
             self.byol_trainer.load(model_path)
             
         # RND dataloader
-        rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir)
+        if self.cfg.task not in MUJOCO_ENVS:
+            rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir)
+        else:
+            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+            rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl)
         self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # BYOL dataloader
-        byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
+        if self.cfg.task not in MUJOCO_ENVS:
+            byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
+        else:
+            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len)
         self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # policy

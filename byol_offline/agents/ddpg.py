@@ -11,6 +11,7 @@ from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
+from utils import MUJOCO_ENVS
 
 class DDPGTrainState(NamedTuple):
     encoder_params: hk.Params
@@ -30,10 +31,16 @@ class DDPG:
         self.cfg = cfg
         
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
-        if byol is None or cfg.reward_aug == 'rnd':
-            encoder_fn = lambda obs: DrQv2Encoder(cfg.obs_shape)(obs)
+        if cfg.task not in MUJOCO_ENVS:
+            if byol is None or cfg.reward_aug == 'rnd':
+                encoder_fn = lambda obs: DrQv2Encoder(cfg.obs_shape)(obs)
+            else:
+                encoder_fn = lambda obs: DreamerEncoder(cfg.obs_shape, cfg.depth)(obs)
         else:
-            encoder_fn = lambda obs: DreamerEncoder(cfg.obs_shape, cfg.depth)(obs)
+            encoder_fn = lambda obs: hk.nets.MLP(
+                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
+                activation=jax.nn.swish
+            )(obs)
         self.encoder = hk.without_apply_rng(hk.transform(encoder_fn))
         
         # actor + critic
@@ -63,12 +70,17 @@ class DDPG:
         key1, key2, key3, key4 = jax.random.split(rng, 4)
         
         encoder_params = self.encoder.init(key1, jnp.zeros((1,) + tuple(cfg.obs_shape)))
-        if byol is None or cfg.reward_aug == 'rnd':
-            actor_params = self.actor.init(key2, jnp.zeros((1, 20000)), jnp.zeros(1))
-            critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 20000)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+        
+        if cfg.task not in MUJOCO_ENVS:
+            if byol is None or cfg.reward_aug == 'rnd':
+                actor_params = self.actor.init(key2, jnp.zeros((1, 20000)), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 20000)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+            else:
+                actor_params = self.actor.init(key2, jnp.zeros((1, 4096)), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 4096)), jnp.zeros((1,) + tuple(cfg.action_shape)))
         else:
-            actor_params = self.actor.init(key2, jnp.zeros((1, 4096)), jnp.zeros(1))
-            critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 4096)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+            actor_params = self.actor.init(key2, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros(1))
+            critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros((1,) + tuple(cfg.action_shape)))
         
         # optimizers
         self.encoder_opt = optax.adam(cfg.encoder_lr)

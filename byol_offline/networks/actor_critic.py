@@ -68,7 +68,7 @@ class DDPGCritic(hk.Module):
 # TODO: do we keep these hardcoded for DMC?
 MIN_LOG_STD = -5
 MAX_LOG_STD = 2
-    
+
 class SACActor(hk.Module):
     def __init__(self, action_shape, hidden_dim):
         super().__init__()
