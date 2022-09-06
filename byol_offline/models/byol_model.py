@@ -29,7 +29,7 @@ class ConvLatentWorldModel(hk.Module):
             self.encoder = DrQv2Encoder(cfg.obs_shape)
         
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
-        self.open_gru = hk.GRU(cfg.gru_hidden_size)
+        self.open_gru = hk.GRU(cfg.gru_hidden_size, w_i_init=jnp.zeros, w_h_init=jnp.zeros, b_init=jnp.zeros)
         
         if cfg.dreamer:
             self.predictor = BYOLPredictor(4096)
@@ -198,7 +198,7 @@ class WorldModelTrainer:
         new_target_params = target_update_fn(new_params, self.train_state.target_params, self.ema)
         
         metrics = {
-            'wm_loss': loss.item()
+            'wm_loss': loss
         }
         
         self.train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)

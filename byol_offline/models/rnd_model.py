@@ -94,7 +94,7 @@ class RNDModelTrainer:
         new_params = optax.apply_updates(self.train_state.params, update)
         
         metrics = {
-            'rnd_loss': loss.item()
+            'rnd_loss': loss
         }
         
         self.train_state = RNDTrainState(

@@ -69,13 +69,13 @@ class Workspace:
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
         if self.cfg.load_model:
-            model_path = self.pretrained_model_dir / 'rnd_5000.pkl' # TODO: don't hardcore
+            model_path = self.pretrained_model_dir / f'rnd_{self.cfg.model_train_epochs}.pkl' # TODO: don't hardcore
             self.rnd_trainer.load(model_path)
 
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
         if self.cfg.load_model:
-            model_path = self.pretrained_model_dir / 'byol_5000.pkl' # TODO: don't hardcore
+            model_path = self.pretrained_model_dir / f'byol_{self.cfg.model_train_epochs}.pkl' # TODO: don't hardcore
             self.byol_trainer.load(model_path)
             
         # RND dataloader
@@ -84,7 +84,7 @@ class Workspace:
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl)
-        self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        self.rnd_dataloader = self.agent_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:

@@ -9,7 +9,7 @@ def l2_normalize(x: jnp.ndarray, axis: Optional[int] = None, epsilon: float=1e-1
     x_inv_norm = jax.lax.rsqrt(jnp.maximum(square_sum, epsilon))
     return x * x_inv_norm
 
-def sliding_window(arr, idx, window_size):
+def sliding_window(arr: jnp.ndarray, idx: int, window_size: int):
     '''Get the relevant mask for given array, starting at index, with specific window size.'''
     ndims = jnp.ndim(arr)
     mask = jnp.arange(arr.shape[0])
