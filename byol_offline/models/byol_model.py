@@ -162,7 +162,7 @@ class WorldModelTrainer:
             loss_vec = jnp.sum(mses, -1) # (T, B)
             new_loss_window = curr_loss_window + loss_vec
 
-            return curr_loss + loss_vec.mean(), new_loss_window
+            return curr_loss + jnp.sum(loss_vec) / window_size, new_loss_window
 
         init_val = (0.0, jnp.zeros((T, B)))
         total_loss, loss_window = jax.lax.fori_loop(0, T - 1, body_fn, init_val)
@@ -227,5 +227,5 @@ class WorldModelTrainer:
                 train_state = dill.load(f)
                 self.train_state = train_state
         except FileNotFoundError:
-            print('cannot load model')
-            return None
+            print('cannot load BYOL-Explore model')
+            exit()

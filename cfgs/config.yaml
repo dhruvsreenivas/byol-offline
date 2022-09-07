@@ -34,15 +34,15 @@ reward_aug: rnd
 load_model: false
 
 # policy training args
-policy_train_steps: 30000000
+policy_train_epochs: 20000
 num_initial_rand_steps: 2500
 policy_rb_capacity: 20000
 policy_batch_size: 256
 
 # policy evaluation args
-policy_eval_every: 10000
+policy_eval_every: 100
 num_eval_episodes: 10
-policy_save_every: 1000
+policy_save_every: 100
 
 # logging
 wandb: true

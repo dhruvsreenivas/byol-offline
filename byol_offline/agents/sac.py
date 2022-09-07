@@ -150,7 +150,7 @@ class SAC:
         
         # get reward aug
         reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
-        transitions.rewards -= self.reward_lambda * jax.lax.stop_gradient(reward_pen) # don't want extra gradients going back to encoder params
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
         
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)

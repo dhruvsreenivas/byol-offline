@@ -145,7 +145,7 @@ class DDPG:
     def critic_loss(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
         # get reward aug
         reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
-        transitions.rewards -= self.reward_lambda * jax.lax.stop_gradient(reward_pen) # don't want extra gradients going back to encoder params
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through encoder
         
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)

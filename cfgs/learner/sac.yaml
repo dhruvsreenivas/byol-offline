@@ -7,6 +7,7 @@ critic_lr: 5e-4
 alpha_lr: 5e-4
 
 # hyperparameters
+discount: 0.99
 reward_lambda: 0.5
 ema: 0.01
 actor_update_freq: 1

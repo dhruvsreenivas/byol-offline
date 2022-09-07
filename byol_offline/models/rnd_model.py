@@ -127,6 +127,6 @@ class RNDModelTrainer:
                 train_state = dill.load(f)
                 self.train_state = train_state
         except FileNotFoundError:
-            print('cannot load model')
-            return None
+            print('cannot load RND model')
+            exit()
         

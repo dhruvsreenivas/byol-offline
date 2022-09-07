@@ -44,7 +44,7 @@ MUJOCO_ENVS = {
     'halfcheetah': 'HalfCheetah-v2',
     'ant': 'Ant-v2',
     'hopper': 'Hopper-v2',
-    'walker': 'Walker2d-v2'
+    'walker2d': 'Walker2d-v2'
 }
 
 LEVELS = ['random', 'medium', 'expert', 'medium-replay', 'medium-expert']

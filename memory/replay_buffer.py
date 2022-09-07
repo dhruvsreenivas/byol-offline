@@ -3,9 +3,12 @@ import io
 import traceback
 import random
 from utils import get_gym_dataset
+from collections import namedtuple
 
 # tensorflow dataset utilities
 import tensorflow as tf
+
+Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 'dones'])
 
 def episode_len(episode):
     # subtract -1 because the dummy first transition
@@ -208,7 +211,7 @@ def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffe
     
     return dataset.as_numpy_iterator()
 
-def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
+def standard_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
                    max_steps,
                    batch_size,
                    prefetch=True):
