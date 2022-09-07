@@ -176,7 +176,7 @@ class Workspace:
             
     def train_agent(self):
         '''Train offline RL agent.'''
-        for epoch in tqdm(range(1, self.cfg.policy_train_epochs)):
+        for epoch in tqdm(range(1, self.cfg.policy_train_epochs + 1)):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.agent_dataloader:
                 transitions = Transition(*batch)

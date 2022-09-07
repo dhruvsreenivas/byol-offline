@@ -183,7 +183,7 @@ class DDPG:
     def update_critic(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
         # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
         loss_grad_fn = jax.value_and_grad(self.critic_loss, argnums=(0, 1))
-        (encoder_loss, c_loss), (encoder_grads, critic_grads) = loss_grad_fn(
+        loss, (encoder_grads, critic_grads) = loss_grad_fn(
             encoder_params,
             critic_params,
             critic_target_params,
@@ -201,8 +201,7 @@ class DDPG:
         new_critic_params = optax.apply_updates(critic_update, self.train_state.critic_params)
         
         metrics = {
-            'critic_loss': c_loss.item(),
-            'encoder_loss': encoder_loss.item()
+            'critic_loss': loss.item()
         }
         
         new_vars = {
