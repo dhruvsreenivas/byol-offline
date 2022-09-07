@@ -49,6 +49,7 @@ class MLPRNDModel(hk.Module):
         return self.predictor(reprs)
     
 class RNDModelTrainer:
+    '''RND model trainer.'''
     def __init__(self, cfg):
         self.cfg = cfg
         

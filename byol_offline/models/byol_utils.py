@@ -14,9 +14,10 @@ def sliding_window(arr: jnp.ndarray, idx: int, window_size: int):
     ndims = jnp.ndim(arr)
     mask = jnp.arange(arr.shape[0])
     mask = jnp.expand_dims(mask, axis=range(1, ndims))
-    mask = jnp.logical_or(mask < idx, mask > idx + window_size) # zeros out for unacceptable starting idxes
+    mask = jnp.logical_or(mask < idx, mask >= idx + window_size)
     
-    masked_arr = jnp.where(mask, 0, arr)
+    masked_arr = jnp.where(mask, 0, arr) # zeros out for unacceptable starting idxes
+    masked_arr = jnp.roll(masked_arr, shift=-idx, axis=0)
     return masked_arr
 
 def target_update_fn(params: hk.Params, target_params: hk.Params, ema: float) -> hk.Params:

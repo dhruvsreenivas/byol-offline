@@ -97,7 +97,7 @@ class MLPLatentWorldModel(hk.Module):
         return pred_latents, embeddings
     
 class WorldModelTrainer:
-    '''World model trainer for DMC tasks.'''
+    '''World model trainer.'''
     def __init__(self, cfg):
         self.cfg = cfg
         
@@ -141,8 +141,8 @@ class WorldModelTrainer:
         def body_fn(idx: int, curr_state: Tuple[float, jnp.ndarray]):
             curr_loss, curr_loss_window = curr_state
             
-            obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s
-            action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s
+            obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s, rolled to front
+            action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s, rolled to front
             
             pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (T, B, embed_dim)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
@@ -157,8 +157,8 @@ class WorldModelTrainer:
             # take L2 loss
             mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
-            mses_mask = sliding_window(mses, idx, window_size) # to get 0 losses for indices not in window
-            mses = jnp.where(mses_mask, mses, 0)
+            mses = sliding_window(mses, 0, window_size)
+            mses = jnp.roll(mses, shift=idx, axis=0)
             loss_vec = jnp.sum(mses, -1) # (T, B)
             new_loss_window = curr_loss_window + loss_vec
 
