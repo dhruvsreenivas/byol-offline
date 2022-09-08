@@ -4,3 +4,4 @@ trained_policies/
 local_runs/
 logs/
 sub_files/
+*__pycache__*

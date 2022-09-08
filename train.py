@@ -87,7 +87,7 @@ class Workspace:
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl)
-        self.rnd_dataloader = standard_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
@@ -98,7 +98,7 @@ class Workspace:
         self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
 
         # RL agent dataloader
-        self.agent_dataloader = standard_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+        self.agent_dataloader = self.byol_dataloader if self.cfg.train_byol else self.rnd_dataloader
         
         # policy
         if self.cfg.learner == 'ddpg':
@@ -114,11 +114,11 @@ class Workspace:
         for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
-                obs, actions = batch
+                obs, actions, _, _, _ = batch
                 batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
                 
                 for k, v in batch_metrics.items():
-                    epoch_metrics[k].update(v, obs.shape[0]) # want to log per example, not per batch avgs
+                    epoch_metrics[k].update(v, obs.shape[0] * obs.shape[1]) # want to log per example, not per batch avgs
                 
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}

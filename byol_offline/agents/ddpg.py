@@ -146,6 +146,10 @@ class DDPG:
         # get reward aug
         reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
         transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through encoder
+
+        # in the case that we have sequential data, we flatten it first
+        if jnp.ndim(transitions.obs) % 2 == 1:
+            transitions = flatten_data(transitions)
         
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)

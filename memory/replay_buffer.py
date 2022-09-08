@@ -77,11 +77,14 @@ class VD4RLSequenceReplayBuffer:
     
     def _sample(self):
         episode = self._sample_episode()
-        idx = np.random.randint(0, episode_len(episode) - self._seq_len + 1)
+        idx = np.random.randint(0, episode_len(episode) - self._seq_len)
         obs = episode["image"][idx : idx + self._seq_len]
         action = episode["action"][idx : idx + self._seq_len]
-        
-        return obs, action
+        reward = episode["reward"][idx : idx + self._seq_len]
+        next_obs = episode["image"][idx + 1 : idx + self._seq_len + 1]
+        done = episode["is_terminal"][idx : idx + self._seq_len]
+
+        return obs, action, reward, next_obs, done
     
 class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
@@ -147,8 +150,11 @@ class D4RLSequenceReplayBuffer:
         idx = np.random.randint(0, self.n_samples - self._seq_len) # TODO: figure out how to pad for more data
         obs = self.dataset['observations'][idx : idx + self._seq_len]
         action = self.dataset['actions'][idx : idx + self._seq_len]
+        reward = self.dataset['rewards'][idx : idx + self._seq_len]
+        next_obs = self.dataset['next_observations'][idx : idx + self._seq_len]
+        done = self.dataset['terminals'][idx : idx + self._seq_len]
         
-        return obs, action
+        return obs, action, reward, next_obs, done
 
 class D4RLTransitionReplayBuffer:
     def __init__(self, env_name, capability):
@@ -174,30 +180,40 @@ def generator_fn(buffer, max_steps=None):
         while True:
             yield buffer._sample()
             
-def transpose_fn_img(obs, action):
-    '''Switches from (B, T, H, W, C) to (T, B, H, W, C).'''
+def transpose_fn_img(obs, action, reward, next_obs, done):
+    '''Switches from (B, T, ...) to (T, B, ...), with img observations.'''
     obs = tf.transpose(obs, (1, 0, 2, 3, 4))
     action = tf.transpose(action, (1, 0, 2))
-    return obs, action
+    reward = tf.transpose(reward, (1, 0))
+    next_obs = tf.transpose(next_obs, (1, 0, 2, 3, 4))
+    done = tf.transpose(done, (1, 0))
+    return obs, action, reward, next_obs, done
 
-def transpose_fn_state(obs, action):
-    '''Switches from (B, T, dim) to (T, B, dim)'''
+def transpose_fn_state(obs, action, reward, next_obs, done):
+    '''Switches from (B, T, ...) to (T, B, ...), with state vector observations.'''
     obs = tf.transpose(obs, (1, 0, 2))
     action = tf.transpose(action, (1, 0, 2))
-    return obs, action
+    reward = tf.transpose(reward, (1, 0))
+    next_obs = tf.transpose(next_obs, (1, 0, 2))
+    done = tf.transpose(done, (1, 0))
+    return obs, action, reward, next_obs, done
 
 def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffer,
                      max_steps,
                      batch_size,
                      prefetch=True):
-    obs, action = buffer._sample()
-    obs_type, action_type = obs.dtype, action.dtype
-    obs_shape, action_shape = obs.shape, action.shape
+    obs, action, reward, next_obs, done = buffer._sample()
+    obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
+    obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
+
     
     generator = lambda: generator_fn(buffer, max_steps)
     output_sig = (
         tf.TensorSpec(shape=obs_shape, dtype=obs_type),
-        tf.TensorSpec(shape=action_shape, dtype=action_type)
+        tf.TensorSpec(shape=action_shape, dtype=action_type),
+        tf.TensorSpec(shape=reward_shape, dtype=reward_type),
+        tf.TensorSpec(shape=next_obs_shape, dtype=next_obs_type),
+        tf.TensorSpec(shape=done_shape, dtype=done_type)
     )
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
     
@@ -211,7 +227,7 @@ def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffe
     
     return dataset.as_numpy_iterator()
 
-def standard_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
+def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
                    max_steps,
                    batch_size,
                    prefetch=True):
