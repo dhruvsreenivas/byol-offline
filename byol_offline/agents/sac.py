@@ -11,7 +11,7 @@ from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
-from utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS, flatten_data
 
 class SACTrainState(NamedTuple):
     encoder_params: hk.Params
@@ -145,7 +145,37 @@ class SAC:
         return self.reward_aug(observations, actions)
     
     @functools.partial(jax.jit, static_argnames=('self'))
-    def critic_loss(self, encoder_params, critic_params, critic_target_params, actor_params, log_alpha, transitions, key, step):
+    def critic_loss_byol(self, encoder_params, critic_params, critic_target_params, actor_params, log_alpha, transitions, key, step):
+        del step
+        
+        # get reward aug
+        reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
+
+        # flatten transitions (BYOL loss is sequential)
+        transitions = flatten_data(transitions)
+        
+        # encode observations
+        features = self.encoder.apply(encoder_params, transitions.obs)
+        next_features = self.encoder.apply(encoder_params, transitions.next_obs)
+        
+        # get the targets
+        dist = self.actor.apply(actor_params, next_features)
+        next_actions = dist.sample(seed=key)
+        log_probs = dist.log_prob(next_actions).sum(-1, keepdims=True)
+        
+        nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
+        v = jnp.minimum(nq1, nq2) - jnp.exp(log_alpha) * log_probs
+        target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * v)
+
+        # get the actual q values
+        q1, q2 = self.critic.apply(critic_params, features, transitions.actions)
+        
+        q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
+        return q_loss
+
+    @functools.partial(jax.jit, static_argnames=('self'))
+    def critic_loss_rnd(self, encoder_params, critic_params, critic_target_params, actor_params, log_alpha, transitions, key, step):
         del step
         
         # get reward aug
@@ -172,12 +202,15 @@ class SAC:
         return q_loss
     
     @functools.partial(jax.jit, static_argnames=('self'))
-    def actor_loss(self, actor_params, encoder_params, critic_params, log_alpha, transitions, key, step):
+    def actor_loss_byol(self, actor_params, encoder_params, critic_params, log_alpha, transitions, key, step):
         del step
+
+        # flatten all data
+        transitions = flatten_data(transitions)
         
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)
-        features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through to encoder no matter what
+        features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through to world model
 
         dist = self.actor.apply(actor_params, features)
         actions = dist.sample(seed=key)
@@ -189,7 +222,41 @@ class SAC:
         return jnp.mean(actor_loss)
     
     @functools.partial(jax.jit, static_argnames=('self'))
-    def alpha_loss(self, log_alpha, encoder_params, actor_params, transitions, key, step):
+    def actor_loss_rnd(self, actor_params, encoder_params, critic_params, log_alpha, transitions, key, step):
+        del step
+        
+        # encode observations
+        features = self.encoder.apply(encoder_params, transitions.obs)
+        features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through to world model
+
+        dist = self.actor.apply(actor_params, features)
+        actions = dist.sample(seed=key)
+        log_probs = dist.log_prob(actions).sum(-1, keepdims=True)
+        
+        q1, q2 = self.critic.apply(critic_params, features, actions)
+        min_q = jnp.minimum(q1, q2)
+        actor_loss = jnp.exp(log_alpha) * log_probs - min_q
+        return jnp.mean(actor_loss)
+    
+    @functools.partial(jax.jit, static_argnames=('self'))
+    def alpha_loss_byol(self, log_alpha, encoder_params, actor_params, transitions, key, step):
+        del step
+
+        # flatten data again
+        transitions = flatten_data(transitions)
+        
+        features = self.encoder.apply(encoder_params, transitions.obs)
+        features = jax.lax.stop_gradient(features)
+        
+        dist = self.actor.apply(actor_params, features)
+        actions = dist.sample(seed=key)
+        log_prob = dist.log_prob(actions).sum(-1, keepdims=True)
+        
+        alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - self.target_entropy)
+        return jnp.mean(alpha_loss)
+    
+    @functools.partial(jax.jit, static_argnames=('self'))
+    def alpha_loss_rnd(self, log_alpha, encoder_params, actor_params, transitions, key, step):
         del step
         
         features = self.encoder.apply(encoder_params, transitions.obs)
@@ -204,7 +271,11 @@ class SAC:
     
     def update_critic(self, encoder_params, critic_params, critic_target_params, actor_params, log_alpha, transitions, key, step):
         # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
-        loss_grad_fn = jax.value_and_grad(self.critic_loss, argnums=(0, 1))
+        if self.cfg.reward_aug == 'byol':
+            loss_grad_fn = jax.value_and_grad(self.critic_loss_byol, argnums=(0, 1))
+        else:
+            loss_grad_fn = jax.value_and_grad(self.critic_loss_rnd, argnums=(0, 1))
+        
         loss, (encoder_grads, critic_grads) = loss_grad_fn(
             encoder_params,
             critic_params,
@@ -236,7 +307,11 @@ class SAC:
         return metrics, new_vars
     
     def update_actor(self, actor_params, encoder_params, critic_params, log_alpha, transitions, key, step):
-        loss_grad_fn = jax.value_and_grad(self.actor_loss)
+        if self.cfg.reward_aug == 'byol':
+            loss_grad_fn = jax.value_and_grad(self.actor_loss_byol)
+        else:
+            loss_grad_fn = jax.value_and_grad(self.actor_loss_rnd)
+        
         a_loss, a_grads = loss_grad_fn(actor_params, encoder_params, critic_params, log_alpha, transitions, key, step)
         
         # update actor params
@@ -254,7 +329,11 @@ class SAC:
         return metrics, new_vars
     
     def update_log_alpha(self, log_alpha, encoder_params, actor_params, transitions, key, step):
-        loss_grad_fn = jax.value_and_grad(self.alpha_loss)
+        if self.cfg.reward_aug == 'byol':
+            loss_grad_fn = jax.value_and_grad(self.alpha_loss_byol)
+        else:
+            loss_grad_fn = jax.value_and_grad(self.alpha_loss_rnd)
+        
         alpha_loss, alpha_grads = loss_grad_fn(log_alpha, encoder_params, actor_params, transitions, key, step)
         
         # update alpha

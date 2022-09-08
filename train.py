@@ -100,7 +100,7 @@ class Workspace:
         # RL agent dataloader
         self.agent_dataloader = self.byol_dataloader if self.cfg.train_byol else self.rnd_dataloader
         
-        # policy
+        # RL agent
         if self.cfg.learner == 'ddpg':
             self.agent = DDPG(self.cfg, self.byol_trainer, self.rnd_trainer)
         else:

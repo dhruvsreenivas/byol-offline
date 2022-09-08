@@ -11,7 +11,7 @@ from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
-from utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS, flatten_data
 
 class DDPGTrainState(NamedTuple):
     encoder_params: hk.Params
@@ -142,14 +142,13 @@ class DDPG:
         return self.reward_aug(observations, actions)
     
     @functools.partial(jax.jit, static_argnames=('self'))
-    def critic_loss(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
-        # get reward aug
+    def critic_loss_byol(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
+        # get reward penalty
         reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
-        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through encoder
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through world model
 
-        # in the case that we have sequential data, we flatten it first
-        if jnp.ndim(transitions.obs) % 2 == 1:
-            transitions = flatten_data(transitions)
+        # flatten data, as this is BYOL critic loss (we've already added reward so no need to treat as sequence anymore)
+        transitions = flatten_data(transitions)
         
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)
@@ -161,8 +160,33 @@ class DDPG:
         next_actions = dist.sample(seed=key)
         
         nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
-        v = jnp.minimum(nq1, nq2)
-        target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * v)
+        nv = jnp.minimum(nq1, nq2)
+        target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * nv)
+
+        # get the actual q values
+        q1, q2 = self.critic.apply(critic_params, features, transitions.actions)
+        
+        q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
+        return q_loss
+
+    @functools.partial(jax.jit, static_argnames=('self'))
+    def critic_loss_rnd(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
+        # get reward penalty
+        reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through world model
+
+        # encode observations
+        features = self.encoder.apply(encoder_params, transitions.obs)
+        next_features = self.encoder.apply(encoder_params, transitions.next_obs)
+        
+        # get the targets
+        std = self.stddev_schedule(step)
+        dist = self.actor.apply(actor_params, next_features, std)
+        next_actions = dist.sample(seed=key)
+        
+        nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
+        nv = jnp.minimum(nq1, nq2)
+        target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * nv)
 
         # get the actual q values
         q1, q2 = self.critic.apply(critic_params, features, transitions.actions)
@@ -171,7 +195,24 @@ class DDPG:
         return q_loss
     
     @functools.partial(jax.jit, static_argnames=('self'))
-    def actor_loss(self, actor_params, encoder_params, critic_params, transitions, key, step):
+    def actor_loss_byol(self, actor_params, encoder_params, critic_params, transitions, key, step):
+        # flatten data
+        transitions = flatten_data(transitions)
+
+        # encode observations
+        features = self.encoder.apply(encoder_params, transitions.obs)
+        features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through no matter what
+
+        std = self.stddev_schedule(step)
+        dist = self.actor.apply(actor_params, features, std)
+        actions = dist.sample(seed=key)
+        
+        q1, q2 = self.critic.apply(critic_params, features, actions)
+        actor_loss = -jnp.mean(jnp.minimum(q1, q2))
+        return actor_loss
+    
+    @functools.partial(jax.jit, static_argnames=('self'))
+    def actor_loss_rnd(self, actor_params, encoder_params, critic_params, transitions, key, step):
         # encode observations
         features = self.encoder.apply(encoder_params, transitions.obs)
         features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through no matter what
@@ -186,7 +227,11 @@ class DDPG:
     
     def update_critic(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
         # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
-        loss_grad_fn = jax.value_and_grad(self.critic_loss, argnums=(0, 1))
+        if self.cfg.reward_aug == 'byol':
+            loss_grad_fn = jax.value_and_grad(self.critic_loss_byol, argnums=(0, 1))
+        else:
+            loss_grad_fn = jax.value_and_grad(self.critic_loss_rnd, argnums=(0, 1))
+        
         loss, (encoder_grads, critic_grads) = loss_grad_fn(
             encoder_params,
             critic_params,
@@ -217,7 +262,11 @@ class DDPG:
         return metrics, new_vars
     
     def update_actor(self, actor_params, encoder_params, critic_params, transitions, key, step):
-        loss_grad_fn = jax.value_and_grad(self.actor_loss)
+        if self.cfg.reward_aug == 'byol':
+            loss_grad_fn = jax.value_and_grad(self.actor_loss_byol)
+        else:
+            loss_grad_fn = jax.value_and_grad(self.actor_loss_rnd)
+        
         a_loss, a_grads = loss_grad_fn(actor_params, encoder_params, critic_params, transitions, key, step)
         
         # update actor only

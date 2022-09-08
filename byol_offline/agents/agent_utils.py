@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import haiku as hk
-from memory.replay_buffer import Transition
 
 class RMS(object):
     """running mean and std """
@@ -23,28 +22,6 @@ class RMS(object):
         self.n += bs
 
         return self.M, self.S
-
-def flatten_data(transitions: Transition):
-    '''In case of sequence data, we flatten across sequence length and batch size dimension.'''
-    def flatten(arr):
-        new_arr = jnp.reshape(arr, (-1,) + arr.shape[2:])
-        return new_arr
-    
-    obs, actions, rewards, next_obs, dones = transitions.obs, transitions.actions, transitions.rewards, transitions.next_obs, transitions.dones
-    obs = flatten(obs)
-    actions = flatten(actions)
-    rewards = flatten(rewards)
-    next_obs = flatten(next_obs)
-    dones = flatten(dones)
-
-    transitions = transitions._replace(
-        obs=obs,
-        actions=actions,
-        rewards=rewards,
-        next_obs=next_obs,
-        dones=dones
-    )
-    return transitions
     
 def update_target(params: hk.Params, target_params: hk.Params, ema: float):
     target_params = jax.tree_util.tree_map(lambda x, y: ema * x + (1.0 - ema) * y, params, target_params)
