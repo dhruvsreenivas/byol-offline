@@ -37,7 +37,7 @@ class VD4RLSequenceReplayBuffer:
     def __init__(self, data_dir, seq_len):
         self._data_dir = data_dir
         self._seq_len = seq_len
-        self._data_keys = ['image', 'action']
+        self._data_keys = ['image', 'action', 'reward', 'is_terminal']
         
         # filenames
         self._episode_fns = []

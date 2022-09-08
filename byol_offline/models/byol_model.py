@@ -126,6 +126,10 @@ class WorldModelTrainer:
         )
         
         self.ema = cfg.ema
+
+        # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
+        if cfg.pmap:
+            self.update = functools.partial(jax.pmap, static_broadcasted_argnums=(0, 1))(self.update)
     
     @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn_window_size(self,

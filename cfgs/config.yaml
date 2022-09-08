@@ -55,6 +55,7 @@ byol:
   action_shape: ${action_shape}
   lr: 1e-3
   ema: 0.99
+  pmap: false
 
   vd4rl:
     obs_shape: ${obs_shape}
