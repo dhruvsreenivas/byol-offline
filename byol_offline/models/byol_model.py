@@ -108,7 +108,7 @@ class WorldModelTrainer:
         
         self.wm = hk.without_apply_rng(hk.transform(wm_fn))
         
-        # params (make sure to initialize phi correctly)
+        # params
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
@@ -131,7 +131,6 @@ class WorldModelTrainer:
         if cfg.pmap:
             self.update = functools.partial(jax.pmap, static_broadcasted_argnums=(0, 1))(self.update)
     
-    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn_window_size(self,
                                wm_params: hk.Params,
                                target_params: hk.Params,
@@ -160,7 +159,7 @@ class WorldModelTrainer:
 
             # take L2 loss
             mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
-            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:])
+            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
             mses = sliding_window(mses, 0, window_size)
             mses = jnp.roll(mses, shift=idx, axis=0)
             loss_vec = jnp.sum(mses, -1) # (T, B)
@@ -172,7 +171,6 @@ class WorldModelTrainer:
         total_loss, loss_window = jax.lax.fori_loop(0, T - 1, body_fn, init_val)
         return total_loss, loss_window
     
-    @functools.partial(jax.jit, static_argnames=('self'))
     def wm_loss_fn(self,
                    wm_params: hk.Params,
                    target_params: hk.Params,
@@ -190,6 +188,7 @@ class WorldModelTrainer:
         total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
         return total_loss / T, total_loss_window / T # take avgs
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def update(self, obs, actions, step):
         del step
         
