@@ -85,6 +85,7 @@ class RNDModelTrainer:
         # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
         return jnp.mean(jnp.square(target_output - output))
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def update(self, obs, step):
         del step
         

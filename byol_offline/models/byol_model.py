@@ -182,6 +182,7 @@ class WorldModelTrainer:
         total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
         return total_loss / T, total_loss_window / T # take avgs
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def update(self, obs, actions, step):
         del step
         
