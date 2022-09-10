@@ -131,6 +131,7 @@ class WorldModelTrainer:
         if cfg.pmap:
             self.update = functools.partial(jax.pmap, static_broadcasted_argnums=(0, 1))(self.update)
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def wm_loss_fn_window_size(self,
                                wm_params: hk.Params,
                                target_params: hk.Params,
@@ -140,37 +141,30 @@ class WorldModelTrainer:
         
         T, B = obs_seq.shape[:2]
 
-        # define body function for given starting index 'idx' that goes into jax.lax.scan
-        def body_fn(idx: int, curr_state: Tuple[float, jnp.ndarray]):
-            curr_loss, curr_loss_window = curr_state
-            
-            obs_window = sliding_window(obs_seq, idx, window_size) # (T, B, *obs_dims), everything except [idx:idx+window_size] 0s, rolled to front
-            action_window = sliding_window(action_seq, idx, window_size) # (T, B, action_dim), everything except [idx:idx+window_size] 0s, rolled to front
-            
-            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window) # (T, B, embed_dim)
-            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
-            
-            _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
-            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
-            
-            # normalize latents
-            pred_latents = l2_normalize(pred_latents, axis=-1)
-            target_latents = l2_normalize(target_latents, axis=-1)
+        # don't need to do for all idxs that work, we just do it for index T - window_size so we don't multiple count the same losses
+        starting_idx = T - window_size
+        obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
+        action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
+        
+        pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
+        pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            # take L2 loss
-            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
-            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
-            mses = sliding_window(mses, 0, window_size)
-            mses = jnp.roll(mses, shift=idx, axis=0)
-            loss_vec = jnp.sum(mses, -1) # (T, B)
-            new_loss_window = curr_loss_window + loss_vec
+        _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
+        target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
 
-            return curr_loss + jnp.sum(loss_vec) / window_size, new_loss_window
+        # normalize latents
+        pred_latents = l2_normalize(pred_latents, axis=-1)
+        target_latents = l2_normalize(target_latents, axis=-1)
 
-        init_val = (0.0, jnp.zeros((T, B)))
-        total_loss, loss_window = jax.lax.fori_loop(0, T - 1, body_fn, init_val)
-        return total_loss, loss_window
+        # take L2 loss
+        mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
+        mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
+        mses = sliding_window(mses, 0, window_size) # zeros out losses we don't care about (i.e. past window size)
+        mses = jnp.roll(mses, shift=starting_idx, axis=0)
+        loss_vec = jnp.sum(mses, -1) # (T, B)
+        return jnp.mean(loss_vec), loss_vec
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def wm_loss_fn(self,
                    wm_params: hk.Params,
                    target_params: hk.Params,
@@ -188,7 +182,6 @@ class WorldModelTrainer:
         total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
         return total_loss / T, total_loss_window / T # take avgs
     
-    @functools.partial(jax.jit, static_argnames=('self',))
     def update(self, obs, actions, step):
         del step
         
