@@ -7,6 +7,7 @@ from collections import namedtuple
 
 # tensorflow dataset utilities
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 'dones'])
 
@@ -131,7 +132,7 @@ class VD4RLTransitionReplayBuffer:
     def _sample(self):
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - 1)
-        obs = episode["image"][idx]
+        obs = episode['image'][idx]
         action = episode['action'][idx]
         reward = episode['reward'][idx]
         next_obs = episode['image'][idx + 1]
@@ -199,9 +200,9 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
     return obs, action, reward, next_obs, done
 
 def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffer,
-                     max_steps,
-                     batch_size,
-                     prefetch=True):
+                    max_steps,
+                    batch_size,
+                    prefetch=True):
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
@@ -216,16 +217,17 @@ def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffe
         tf.TensorSpec(shape=done_shape, dtype=done_type)
     )
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
-    
     dataset = dataset.batch(batch_size, drop_remainder=True)
+
     if isinstance(buffer, VD4RLSequenceReplayBuffer):
         dataset = dataset.map(transpose_fn_img)
     else:
         dataset = dataset.map(transpose_fn_state)
+    
     if prefetch:
         dataset = dataset.prefetch(10)
     
-    return dataset.as_numpy_iterator()
+    return tfds.as_numpy(dataset)
 
 def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
                    max_steps,
@@ -245,26 +247,34 @@ def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBu
         tf.TensorSpec(shape=done_shape, dtype=done_type),
     )
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
-    
     dataset = dataset.batch(batch_size, drop_remainder=True)
+
     if prefetch:
         dataset = dataset.prefetch(10)
     
-    return dataset.as_numpy_iterator()
+    return tfds.as_numpy(dataset)
 
 if __name__ == '__main__':
-    # from pathlib import Path
-    # data_dir = Path('../offline_data/cheetah_run/med_exp')
+    from pathlib import Path
+    data_dir = Path('../offline_data/cheetah_run/med_exp')
     seq_len = 25
     
-    rb = D4RLSequenceReplayBuffer('hopper', 'medium', seq_len)
+    rb = VD4RLSequenceReplayBuffer(data_dir, seq_len)
     print('rb created')
-    dataloader = byol_dataloader(rb, max_steps=200, batch_size=20)
+    dataloader = byol_dataloader(rb, max_steps=200, n_epochs=10, batch_size=20)
     print('dataloader created')
     
-    batch = next(dataloader)
-    print(type(batch))
-    obs, action = batch
-    print(obs.shape, type(obs), obs.dtype)
-    print(action.shape, type(action), action.dtype)
+    for epoch in range(10):
+        print(f'fake epoch {epoch}')
+        print('-' * 50)
+        for batch in dataloader:
+            print('-' * 50)
+            obs, action, reward, next_obs, done = batch
+            print(obs.shape, type(obs), obs.dtype)
+            print(action.shape, type(action), action.dtype)
+            print(reward.shape, type(reward), reward.dtype)
+            print(next_obs.shape, type(next_obs), next_obs.dtype)
+            print(done.shape, type(done), done.dtype)
+            print('-' * 50)
+    
     exit()
