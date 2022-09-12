@@ -38,7 +38,7 @@ class DDPG:
                 encoder_fn = lambda obs: DreamerEncoder(cfg.obs_shape, cfg.depth)(obs)
         else:
             encoder_fn = lambda obs: hk.nets.MLP(
-                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
+                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
                 activation=jax.nn.swish
             )(obs)
         self.encoder = hk.without_apply_rng(hk.transform(encoder_fn))

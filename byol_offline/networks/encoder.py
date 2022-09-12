@@ -30,6 +30,7 @@ class DrQv2Encoder(hk.Module):
         return h
         
 class DreamerEncoder(hk.Module):
+    '''Dreamer encoder, from DreamerV2.'''
     def __init__(self, obs_shape, depth):
         super().__init__()
         assert len(obs_shape) == 3
