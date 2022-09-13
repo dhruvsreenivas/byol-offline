@@ -99,15 +99,15 @@ class RNDModelTrainer:
             'rnd_loss': loss
         }
         
-        self.train_state = RNDTrainState(
+        new_train_state = RNDTrainState(
             params=new_params,
             target_params=self.train_state.target_params,
             opt_state=new_opt_state
         )
         
-        return metrics
+        return new_train_state, metrics
     
-    @functools.partial(jax.jit, static_argnames=('self'))
+    @functools.partial(jax.jit, static_argnames=('self',))
     def compute_uncertainty(self, obs, actions, step):
         '''Computes RND uncertainty bonus.'''
         del step

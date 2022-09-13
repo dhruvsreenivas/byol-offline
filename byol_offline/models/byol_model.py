@@ -29,7 +29,7 @@ class ConvLatentWorldModel(hk.Module):
             self.encoder = DrQv2Encoder(cfg.obs_shape)
         
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
-        self.open_gru = hk.GRU(cfg.gru_hidden_size, w_i_init=jnp.zeros, w_h_init=jnp.zeros, b_init=jnp.zeros)
+        self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
         if cfg.dreamer:
             self.predictor = BYOLPredictor(4096)
@@ -198,9 +198,10 @@ class WorldModelTrainer:
             'wm_loss': loss
         }
         
-        self.train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
-        return metrics
+        new_train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
+        return new_train_state, metrics
     
+    @functools.partial(jax.jit, static_argnames=('self',))
     def compute_uncertainty(self, obs_seq, action_seq, step):
         '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
         

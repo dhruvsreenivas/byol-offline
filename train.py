@@ -115,10 +115,10 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, _, _, _ = batch
-                batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
+                self.byol_trainer.train_state, batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
                 
                 for k, v in batch_metrics.items():
-                    epoch_metrics[k].update(v, obs.shape[0] * obs.shape[1]) # want to log per example, not per batch avgs
+                    epoch_metrics[k].update(v, obs.shape[1]) # want to log per batch
                 
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
@@ -134,10 +134,10 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
                 obs, _, _, _, _ = batch
-                batch_metrics = self.rnd_trainer.update(obs, self.global_step)
+                self.rnd_trainer.train_state, batch_metrics = self.rnd_trainer.update(obs, self.global_step)
                 
                 for k, v in batch_metrics.items():
-                    epoch_metrics[k].update(v, obs.shape[0]) # want to log per example, not per batch avgs
+                    epoch_metrics[k].update(v, obs.shape[0])
             
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
