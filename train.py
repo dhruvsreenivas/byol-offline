@@ -147,7 +147,7 @@ class Workspace:
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
                 
-    def eval_agent(self):
+    def eval_agent_mujoco(self):
         episode_rewards = []
         episode_count = 0
         episode_until = Until(self.cfg.num_eval_episodes)
@@ -166,6 +166,35 @@ class Workspace:
             episode_rewards.append(episode_reward)
             episode_count += 1
             
+        metrics = {
+            'eval_rew_mean': np.mean(episode_rewards),
+            'eval_rew_std': np.std(episode_rewards)
+        }
+        if self.cfg.wandb:
+            wandb.log(metrics)
+
+    def eval_agent_dmc(self):
+        episode_rewards = []
+        episode_count = 0
+        episode_until = Until(self.cfg.num_eval_episodes)
+
+        while episode_until(episode_count):
+            time_step = self.eval_env.reset()
+            done = False
+            episode_reward = 0.0
+            while not done:
+                ob = time_step.observation
+                action = self.agent.act(ob, self.global_step, eval_mode=True)
+
+                time_step = self.eval_env.step(action)
+                reward = time_step.reward
+                done = time_step.last
+
+                episode_reward += reward
+            
+            episode_rewards.append(episode_reward)
+            episode_count += 1
+        
         metrics = {
             'eval_rew_mean': np.mean(episode_rewards),
             'eval_rew_std': np.std(episode_rewards)

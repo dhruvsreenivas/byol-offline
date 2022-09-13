@@ -253,28 +253,3 @@ def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBu
         dataset = dataset.prefetch(10)
     
     return tfds.as_numpy(dataset)
-
-if __name__ == '__main__':
-    from pathlib import Path
-    data_dir = Path('../offline_data/cheetah_run/med_exp')
-    seq_len = 25
-    
-    rb = VD4RLSequenceReplayBuffer(data_dir, seq_len)
-    print('rb created')
-    dataloader = byol_dataloader(rb, max_steps=200, n_epochs=10, batch_size=20)
-    print('dataloader created')
-    
-    for epoch in range(10):
-        print(f'fake epoch {epoch}')
-        print('-' * 50)
-        for batch in dataloader:
-            print('-' * 50)
-            obs, action, reward, next_obs, done = batch
-            print(obs.shape, type(obs), obs.dtype)
-            print(action.shape, type(action), action.dtype)
-            print(reward.shape, type(reward), reward.dtype)
-            print(next_obs.shape, type(next_obs), next_obs.dtype)
-            print(done.shape, type(done), done.dtype)
-            print('-' * 50)
-    
-    exit()

@@ -28,7 +28,8 @@ class ClippedNormal(distrax.Normal):
         return self._clamp(x)
     
 def squashed_normal_dist(loc, scale):
-    return distrax.Transformed(distrax.Normal(loc, scale), distrax.Tanh())
+    # TODO: find out whether to do normal vs multivariate normal diag
+    return distrax.Transformed(distrax.Normal(loc, scale), distrax.Block(distrax.Tanh(), ndims=1))
 
 INITIALIZERS = {
     'xavier_uniform': hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
