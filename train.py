@@ -188,7 +188,7 @@ class Workspace:
 
                 time_step = self.eval_env.step(action)
                 reward = time_step.reward
-                done = time_step.last
+                done = time_step.last()
 
                 episode_reward += reward
             
@@ -201,9 +201,17 @@ class Workspace:
         }
         if self.cfg.wandb:
             wandb.log(metrics)
+
+    def eval_agent(self):
+        if self.cfg.task in MUJOCO_ENVS:
+            self.eval_agent_mujoco()
+        else:
+            self.eval_agent_dmc()
             
     def train_agent(self):
         '''Train offline RL agent.'''
+        eval_every = Every(self.cfg.policy_eval_every)
+        save_every = Every(self.cfg.model_save_every)
         for epoch in tqdm(range(1, self.cfg.policy_train_epochs + 1)):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.agent_dataloader:
@@ -219,9 +227,14 @@ class Workspace:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
             
-            if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
+            # save when necessary
+            if self.cfg.save_model and save_every(epoch) == 0:
                 model_path = self.policy_dir / f'policy_{epoch}.pkl'
                 self.agent.save(model_path)
+
+            # eval when necessary (in the beginning as well)
+            if epoch == 1 or eval_every(epoch):
+                self.eval_agent()
                 
 @hydra.main(config_path='./cfgs', config_name='config')
 def main(cfg):
