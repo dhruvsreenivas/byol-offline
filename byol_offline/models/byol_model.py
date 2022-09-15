@@ -24,9 +24,9 @@ class ConvLatentWorldModel(hk.Module):
         
         # nets
         if cfg.dreamer:
-            self.encoder = DreamerEncoder(cfg.obs_shape, cfg.depth)
+            self.encoder = DreamerEncoder(cfg.depth)
         else:
-            self.encoder = DrQv2Encoder(cfg.obs_shape)
+            self.encoder = DrQv2Encoder()
         
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
@@ -40,9 +40,7 @@ class ConvLatentWorldModel(hk.Module):
         # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
         # first get embeddings
         T, B = obs.shape[0], obs.shape[1]
-        obs = jnp.reshape(obs, (-1,) + obs.shape[2:])
-        embeddings = self.encoder(obs)
-        embeddings = jnp.reshape(embeddings, (T, -1) + embeddings.shape[1:]) # (T, B, embed_dim)
+        embeddings = hk.BatchApply(self.encoder)(obs)
         state = self.closed_gru.initial_state(B)
         
         embedding, action = embeddings[0], actions[0]
@@ -51,9 +49,7 @@ class ConvLatentWorldModel(hk.Module):
         latent = jnp.expand_dims(latent, 0)
         
         states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state)
-        states = jnp.reshape(states, (-1,) + states.shape[2:])
-        latents = self.predictor(states)
-        latents = jnp.reshape(latents, (-1, B) + latents.shape[1:])
+        latents = hk.BatchApply(self.predictor)(states)
         
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
         return pred_latents, embeddings
@@ -78,6 +74,8 @@ class MLPLatentWorldModel(hk.Module):
         # obs should be of shape (T, B, obs_dim), actions of shape (T, B, action_dim)
         # first get embeddings
         T, B = obs.shape[0], obs.shape[1]
+
+        # TODO: do hk.BatchApply here
         obs = jnp.reshape(obs, (-1,) + obs.shape[2:])
         embeddings = self.encoder(obs)
         embeddings = jnp.reshape(embeddings, (T, -1) + embeddings.shape[1:]) # (T, B, embed_dim)
@@ -89,6 +87,7 @@ class MLPLatentWorldModel(hk.Module):
         latent = jnp.expand_dims(latent, 0)
         
         states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state)
+        # TODO: do hk.BatchApply here
         states = jnp.reshape(states, (-1,) + states.shape[2:])
         latents = self.predictor(states)
         latents = jnp.reshape(latents, (-1, B) + latents.shape[1:])

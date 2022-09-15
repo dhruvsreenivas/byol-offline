@@ -5,12 +5,11 @@ from byol_offline.networks.network_utils import INITIALIZERS
 
 class DrQv2Encoder(hk.Module):
     '''DeepMind Control Suite encoder, from DrQv2.'''
-    def __init__(self, obs_shape):
+    def __init__(self):
         super().__init__()
-        assert len(obs_shape) == 3
         self.repr_dim = 20000
         
-        self.net = hk.Sequential([
+        self.convnet = hk.Sequential([
             hk.Conv2D(32, kernel_shape=3, stride=2, w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
             hk.Conv2D(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
@@ -24,16 +23,13 @@ class DrQv2Encoder(hk.Module):
         
     def __call__(self, obs):
         obs = obs / 255.0 - 0.5
-        assert obs.shape[1:] == (64, 64, 3)
-        
-        h = self.net(obs)
+        h = self.convnet(obs)
         return h
         
 class DreamerEncoder(hk.Module):
     '''Dreamer encoder, from DreamerV2.'''
-    def __init__(self, obs_shape, depth):
+    def __init__(self, depth):
         super().__init__()
-        assert len(obs_shape) == 3
         
         self.convnet = hk.Sequential([
             hk.Conv2D(depth, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
@@ -49,16 +45,7 @@ class DreamerEncoder(hk.Module):
         
     def __call__(self, obs):
         obs = obs / 255.0 - 0.5
-        sequence = jnp.ndim(obs) == 5
-        if sequence:
-            # (T, B, H, W, C)
-            T = obs.shape[0]
-            obs = obs.reshape((-1,) + obs.shape[2:])
-        
         out = self.convnet(obs)
-        if sequence:
-            out = out.reshape((T, -1) + out.shape[1:])
-        
         return out
 
 # ===== for encoder repr dim calculation ======

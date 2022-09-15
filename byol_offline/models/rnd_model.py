@@ -21,9 +21,9 @@ class ConvRNDModel(hk.Module):
     
         # nets
         if cfg.dreamer:
-            self.encoder = DreamerEncoder(cfg.obs_shape, cfg.depth)
+            self.encoder = DreamerEncoder(cfg.depth)
         else:
-            self.encoder = DrQv2Encoder(cfg.obs_shape)
+            self.encoder = DrQv2Encoder()
             
         self.predictor = RNDPredictor(cfg)
         

@@ -35,9 +35,9 @@ class SAC:
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
         if cfg.task not in MUJOCO_ENVS:
             if byol is None or cfg.reward_aug == 'rnd':
-                encoder_fn = lambda obs: DrQv2Encoder(cfg.obs_shape)(obs)
+                encoder_fn = lambda obs: DrQv2Encoder()(obs)
             else:
-                encoder_fn = lambda obs: DreamerEncoder(cfg.obs_shape, cfg.depth)(obs)
+                encoder_fn = lambda obs: DreamerEncoder(cfg.depth)(obs)
         else:
             encoder_fn = lambda obs: hk.nets.MLP(
                 [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
