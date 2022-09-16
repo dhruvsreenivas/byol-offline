@@ -79,10 +79,10 @@ class VD4RLSequenceReplayBuffer:
     def _sample(self):
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - self._seq_len)
-        obs = episode["image"][idx : idx + self._seq_len]
+        obs = episode["image"][idx : idx + self._seq_len].astype(np.float32)
         action = episode["action"][idx : idx + self._seq_len]
         reward = episode["reward"][idx : idx + self._seq_len]
-        next_obs = episode["image"][idx + 1 : idx + self._seq_len + 1]
+        next_obs = episode["image"][idx + 1 : idx + self._seq_len + 1].astype(np.float32)
         done = episode["is_terminal"][idx : idx + self._seq_len]
 
         return obs, action, reward, next_obs, done
@@ -132,10 +132,10 @@ class VD4RLTransitionReplayBuffer:
     def _sample(self):
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - 1)
-        obs = episode['image'][idx]
+        obs = episode['image'][idx].astype(np.float32)
         action = episode['action'][idx]
         reward = episode['reward'][idx]
-        next_obs = episode['image'][idx + 1]
+        next_obs = episode['image'][idx + 1].astype(np.float32)
         done = episode['is_terminal'][idx]
         
         return obs, action, reward, next_obs, done
