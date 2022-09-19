@@ -16,7 +16,7 @@ action_repeat: 2
 # world model training + RND model training
 obs_shape: ???
 action_shape: ???
-model_train_epochs: 20000
+model_train_epochs: 1000
 model_batch_size: 50
 seq_len: 50
 max_steps: 100000
@@ -34,9 +34,9 @@ reward_aug: rnd
 load_model: false
 
 # policy training args
-policy_train_epochs: 5000
-policy_rb_capacity: 20000
-policy_batch_size: 256
+policy_train_epochs: 1000
+policy_rb_capacity: 10000
+policy_batch_size: 50
 
 # policy evaluation args
 policy_eval_every: 100
