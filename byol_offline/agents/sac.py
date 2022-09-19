@@ -164,7 +164,7 @@ class SAC:
         next_actions = dist.sample(seed=key)
         log_probs = dist.log_prob(next_actions).sum(-1, keepdims=True)
         
-        nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
+        nq1, nq2 = self.critic.apply(critic_target_params, next_features, next_actions)
         v = jnp.minimum(nq1, nq2) - jnp.exp(log_alpha) * log_probs
         target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * v)
 
