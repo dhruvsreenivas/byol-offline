@@ -98,7 +98,10 @@ class Workspace:
         self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
 
         # RL agent dataloader
-        self.agent_dataloader = self.byol_dataloader if self.cfg.train_byol else self.rnd_dataloader
+        if self.cfg.train_byol:
+            self.agent_dataloader = byol_dataloader(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+        else:
+            self.agent_dataloader = rnd_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         
         # RL agent
         if self.cfg.learner == 'ddpg':
@@ -115,6 +118,7 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, _, _, _ = batch
+                print(obs.dtype, actions.dtype)
                 self.byol_trainer.train_state, batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
                 
                 for k, v in batch_metrics.items():
@@ -158,6 +162,8 @@ class Workspace:
             episode_reward = 0.0
             while not done:
                 action = self.agent.act(ob, self.global_step, eval_mode=True)
+                action = np.asarray(action)
+
                 n_ob, r, done, _ = self.eval_env.step(action)
                 episode_reward += r
                 
@@ -185,6 +191,7 @@ class Workspace:
             while not done:
                 ob = time_step.observation
                 action = self.agent.act(ob, self.global_step, eval_mode=True)
+                action = np.asarray(action)
 
                 time_step = self.eval_env.step(action)
                 reward = time_step.reward
@@ -218,8 +225,9 @@ class Workspace:
                 transitions = Transition(*batch)
                 batch_metrics = self.agent.update(transitions, self.global_step)
                 
+                batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
                 for k, v in batch_metrics.items():
-                    epoch_metrics[k].update(v, transitions.obs.shape[0])
+                    epoch_metrics[k].update(v, batch_size)
 
                 self.global_step += 1
                 

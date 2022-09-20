@@ -77,7 +77,7 @@ class RNDModelTrainer:
             opt_state=rnd_opt_state
         )
     
-    @functools.partial(jax.jit, static_argnames=('self'))
+    @functools.partial(jax.jit, static_argnames=('self',))
     def rnd_loss_fn(self, params, target_params, obs):
         output = self.rnd.apply(params, obs)
         target_output = self.rnd.apply(target_params, obs)
@@ -89,8 +89,8 @@ class RNDModelTrainer:
     def update(self, obs, step):
         del step
         
-        grad_fn = jax.value_and_grad(self.rnd_loss_fn)
-        loss, grads = grad_fn(self.train_state.params, self.train_state.target_params, obs)
+        loss_grad_fn = jax.value_and_grad(self.rnd_loss_fn)
+        loss, grads = loss_grad_fn(self.train_state.params, self.train_state.target_params, obs)
         
         update, new_opt_state = self.rnd_opt.update(grads, self.train_state.opt_state)
         new_params = optax.apply_updates(self.train_state.params, update)

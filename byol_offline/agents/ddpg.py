@@ -184,7 +184,7 @@ class DDPG:
         dist = self.actor.apply(actor_params, next_features, std)
         next_actions = dist.sample(seed=key)
         
-        nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
+        nq1, nq2 = self.critic.apply(critic_target_params, next_features, next_actions)
         nv = jnp.minimum(nq1, nq2)
         target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * nv)
 
