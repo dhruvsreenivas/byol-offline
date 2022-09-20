@@ -289,10 +289,10 @@ class SAC:
         
         # update both encoder and critic
         enc_update, enc_opt_state = self.encoder_opt.update(encoder_grads, self.train_state.encoder_opt_state)
-        new_enc_params = optax.apply_updates(enc_update, self.train_state.encoder_params)
+        new_enc_params = optax.apply_updates(self.train_state.encoder_params, enc_update)
         
         critic_update, critic_opt_state = self.critic_opt.update(critic_grads, self.train_state.critic_opt_state)
-        new_critic_params = optax.apply_updates(critic_update, self.train_state.critic_params)
+        new_critic_params = optax.apply_updates(self.train_state.critic_params, critic_update)
         
         metrics = {
             'critic_loss': loss.item()
@@ -316,7 +316,7 @@ class SAC:
         
         # update actor params
         actor_update, actor_opt_state = self.actor_opt.update(a_grads, self.train_state.actor_opt_state)
-        new_actor_params = optax.apply_updates(actor_update, self.train_state.actor_params)
+        new_actor_params = optax.apply_updates(self.train_state.actor_params, actor_update)
         
         metrics = {
             'actor_loss': a_loss.item()
@@ -338,7 +338,7 @@ class SAC:
         
         # update alpha
         alpha_update, new_log_alpha_opt_state = self.log_alpha_opt.update(alpha_grads, self.train_state.log_alpha_opt_state)
-        new_log_alpha_params = optax.apply_updates(alpha_update, self.train_state.log_alpha_params)
+        new_log_alpha_params = optax.apply_updates(self.train_state.log_alpha_params, alpha_update)
         
         metrics = {
             'alpha_loss': alpha_loss.item()
@@ -351,7 +351,7 @@ class SAC:
         return metrics, new_vars
     
     def update(self, transitions, step):
-        key1, key2, key3 = jax.random.split(self.train_state.rng_key, 3)
+        key1, key2, key3, key4 = jax.random.split(self.train_state.rng_key, 3)
         
         # critic update
         critic_metrics, critic_new_vars = self.update_critic(
@@ -388,6 +388,21 @@ class SAC:
             actor_opt_state=actor_new_vars['actor_opt_state']
         )
         
+        # update log alpha
+        log_alpha_metrics, log_alpha_new_vars = self.update_log_alpha(
+            upd_train_state.log_alpha_params,
+            upd_train_state.encoder_params,
+            upd_train_state.actor_params,
+            transitions,
+            key3,
+            step
+        )
+        
+        upd_train_state = upd_train_state._replace(
+            log_alpha_params=log_alpha_new_vars['log_alpha_params'],
+            log_alpha_opt_state=log_alpha_new_vars['log_alpha_opt_state']
+        )
+        
         # update critic target
         new_target_params = update_target(
             upd_train_state.critic_params,
@@ -397,11 +412,11 @@ class SAC:
         
         self.train_state = upd_train_state._replace(
             critic_target_params=new_target_params,
-            rng_key=key3
+            rng_key=key4
         )
         
         # logging
-        metrics = {**critic_metrics, **actor_metrics}
+        metrics = {**critic_metrics, **actor_metrics, **log_alpha_metrics}
         return metrics
     
     def save(self, model_path):

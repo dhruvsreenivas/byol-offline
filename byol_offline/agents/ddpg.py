@@ -244,10 +244,10 @@ class DDPG:
         
         # update both encoder and critic
         enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, self.train_state.encoder_opt_state)
-        new_enc_params = optax.apply_updates(enc_update, self.train_state.encoder_params)
+        new_enc_params = optax.apply_updates(self.train_state.encoder_params, enc_update)
         
         critic_update, new_critic_opt_state = self.critic_opt.update(critic_grads, self.train_state.critic_opt_state)
-        new_critic_params = optax.apply_updates(critic_update, self.train_state.critic_params)
+        new_critic_params = optax.apply_updates(self.train_state.critic_params, critic_update)
         
         metrics = {
             'critic_loss': loss.item()
