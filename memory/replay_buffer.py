@@ -14,17 +14,6 @@ Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 
 def episode_len(episode):
     # subtract -1 because the dummy first transition
     return next(iter(episode.values())).shape[0] - 1
-
-def chunk_len(episode):
-    # subtract -1 because the dummy first transition
-    return next(iter(episode.values())).shape[0]
-
-def save_episode(episode, fn):
-    with io.BytesIO() as bs:
-        np.savez_compressed(bs, **episode)
-        bs.seek(0)
-        with fn.open("wb") as f:
-            f.write(bs.read())
             
 def load_episode(fn, relevant_keys):
     # Loads episode and only grabs relevant
