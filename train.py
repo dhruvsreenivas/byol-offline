@@ -66,24 +66,25 @@ class Workspace:
                 self.cfg.seed,
                 self.cfg.img_size
             )
-            self.cfg.obs_shape = self.train_env.observation_spec().shape
+            obs_spec = self.train_env.observation_spec()
+            self.cfg.obs_shape = (obs_spec[0] * self.cfg.frame_stack, ) + obs_spec[1:]
             self.cfg.action_shape = self.train_env.action_spec().shape
         
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
         if self.cfg.load_model:
-            model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl' # TODO: don't hardcore
+            model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl'
             self.rnd_trainer.load(model_path)
 
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
         if self.cfg.load_model:
-            model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl' # TODO: don't hardcore
+            model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl'
             self.byol_trainer.load(model_path)
             
         # RND dataloader
         if self.cfg.task not in MUJOCO_ENVS:
-            rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir)
+            rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl)
@@ -108,10 +109,15 @@ class Workspace:
             self.agent = DDPG(self.cfg, self.byol_trainer, self.rnd_trainer)
         else:
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
+            
+        # simple modeling for sanity checking
+        self.simple_single_step_dynamics_model = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
 
+    # ==================== MODEL TRAINING ====================
+    
     def train_byol(self):
         '''Train BYOL-Explore latent world model offline.'''
         for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
@@ -150,6 +156,8 @@ class Workspace:
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
+                
+    # ==================== TRAINING AGENT ====================
                 
     def eval_agent_mujoco(self):
         episode_rewards = []
@@ -243,6 +251,11 @@ class Workspace:
             # eval when necessary (in the beginning as well)
             if epoch == 1 or eval_every(epoch):
                 self.eval_agent()
+                
+    # ==================== SANITY CHECKING ====================
+    
+    def train_simple(self):
+        pass
                 
 @hydra.main(config_path='./cfgs', config_name='config')
 def main(cfg):

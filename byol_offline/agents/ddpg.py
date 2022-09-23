@@ -117,6 +117,7 @@ class DDPG:
         mix = jnp.clip(step / self.std_duration, 0.0, 1.0)
         return (1.0 - mix) * self.init_std + mix * self.final_std
         
+    # can jax jit if we want
     def act(self, obs, step, eval_mode=False):
         rng, key = jax.random.split(self.train_state.rng_key)
         
@@ -127,10 +128,9 @@ class DDPG:
         actor_params = self.train_state.actor_params
         dist = self.actor.apply(actor_params, features, std)
         
-        if eval_mode:
-            action = dist.mean()
-        else:
-            action = dist.sample(seed=key)
+        mean = dist.mean()
+        sample = dist.sample(seed=key, clip=self.std_clip_val)
+        action = jnp.where(eval_mode, mean, sample)
         
         self.train_state = self.train_state._replace(
             rng_key=rng
@@ -141,11 +141,50 @@ class DDPG:
     def get_reward_aug(self, observations, actions):
         return self.reward_aug(observations, actions)
     
+    # =================== WARMSTARTING ===================
+    
+    @functools.partial(jax.jit, static_argnames=('self',))
+    def bc_loss(self, encoder_params, actor_params, obs, actions, key, step):
+        std = self.stddev_schedule(step)
+        features = self.encoder.apply(encoder_params, jnp.expand_dims(obs, 0)).squeeze()
+        dist = self.actor.apply(actor_params, features, std)
+        
+        sampled_actions = dist.sample(seed=key, clip=self.std_clip_val)
+        loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, similar to DrQ+BC
+        return loss
+    
+    @functools.partial(jax.jit, static_argnames=('self',))
+    def bc_update(self, transitions, step):
+        rng, key = jax.random.split(self.train_state.rng_key)
+        
+        loss_grad_fn = jax.value_and_grad(self.bc_loss, argnums=(0, 1))
+        loss, (encoder_grads, actor_grads) = loss_grad_fn(self.train_state.encoder_params, self.train_state.actor_params, transitions.obs, transitions.actions, key, step)
+        
+        # encoder update
+        enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, self.train_state.encoder_opt_state)
+        new_enc_params = optax.apply_updates(self.train_state.encoder_params, enc_update)
+        
+        # actor update
+        act_update, new_act_opt_state = self.actor_opt.update(actor_grads, self.train_state.actor_opt_state)
+        new_actor_params = optax.apply_updates(self.train_state.actor_params, act_update)
+        
+        self.train_state = self.train_state._replace(
+            encoder_params=new_enc_params,
+            actor_params=new_actor_params,
+            encoder_opt_state=new_enc_opt_state,
+            actor_opt_state=new_act_opt_state,
+            rng_key=rng
+        )
+        
+        return {'bc_loss': loss}
+    
+    # =================== AGENT LOSS/UPDATE FUNCTIONS ===================
+    
     @functools.partial(jax.jit, static_argnames=('self'))
     def critic_loss_byol(self, encoder_params, critic_params, critic_target_params, actor_params, transitions, key, step):
         # get reward penalty
         reward_pen = self.get_reward_aug(transitions.obs, transitions.actions)
-        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through world model
+        transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure gradients don't go back through world model
 
         # flatten data, as this is BYOL critic loss (we've already added reward so no need to treat as sequence anymore)
         transitions = flatten_data(transitions)
@@ -157,7 +196,7 @@ class DDPG:
         # get the targets
         std = self.stddev_schedule(step)
         dist = self.actor.apply(actor_params, next_features, std)
-        next_actions = dist.sample(seed=key)
+        next_actions = dist.sample(seed=key, clip=self.std_clip_val)
         
         nq1, nq2 = self.critic.apply(critic_target_params, next_features, next_actions)
         nv = jnp.minimum(nq1, nq2)
@@ -182,7 +221,7 @@ class DDPG:
         # get the targets
         std = self.stddev_schedule(step)
         dist = self.actor.apply(actor_params, next_features, std)
-        next_actions = dist.sample(seed=key)
+        next_actions = dist.sample(seed=key, clip=self.std_clip_val)
         
         nq1, nq2 = self.critic.apply(critic_target_params, next_features, next_actions)
         nv = jnp.minimum(nq1, nq2)
@@ -205,7 +244,7 @@ class DDPG:
 
         std = self.stddev_schedule(step)
         dist = self.actor.apply(actor_params, features, std)
-        actions = dist.sample(seed=key)
+        actions = dist.sample(seed=key, clip=self.std_clip_val)
         
         q1, q2 = self.critic.apply(critic_params, features, actions)
         actor_loss = -jnp.mean(jnp.minimum(q1, q2))
@@ -219,7 +258,7 @@ class DDPG:
 
         std = self.stddev_schedule(step)
         dist = self.actor.apply(actor_params, features, std)
-        actions = dist.sample(seed=key)
+        actions = dist.sample(seed=key, clip=self.std_clip_val)
         
         q1, q2 = self.critic.apply(critic_params, features, actions)
         actor_loss = -jnp.mean(jnp.minimum(q1, q2))

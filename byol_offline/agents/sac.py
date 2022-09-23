@@ -130,10 +130,9 @@ class SAC:
         actor_params = self.train_state.actor_params
         dist = self.actor.apply(actor_params, features)
         
-        if eval_mode:
-            action = dist.mean()
-        else:
-            action = dist.sample(seed=key)
+        mean = dist.mean()
+        sample = dist.sample(seed=key)
+        action = jnp.where(eval_mode, mean, sample)
         
         self.train_state = self.train_state._replace(
             rng_key=rng

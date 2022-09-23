@@ -89,6 +89,17 @@ rnd:
     hidden_dim: ${hidden_dim}
     repr_dim: 50
 
+simple_dynamics:
+  model_type: mlp_dynamics
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  hidden_dim: ${hidden_dim}
+  optim: sgd
+  lr: 1e-4
+  train_for_diff: true
+  transform: true
+
+
 hydra:
   run:
     dir: ./local_runs/${now:%Y.%m.%d}/${now:%H%M%S}_${hydra.job.override_dirname}

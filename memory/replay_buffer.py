@@ -78,9 +78,10 @@ class VD4RLSequenceReplayBuffer:
     
 class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, frame_stack):
         self._data_dir = data_dir
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
+        self._frame_stack = frame_stack
         
         # filenames
         self._episode_fns = []
@@ -121,10 +122,22 @@ class VD4RLTransitionReplayBuffer:
     def _sample(self):
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - 1)
-        obs = episode['image'][idx].astype(np.float32)
+        if idx < self._frame_stack - 1:
+            first_frame = episode['image'][0]
+            curr_frame = episode['image'][idx]
+            obs = np.concatenate([first_frame] * 2 + [curr_frame], axis=-1).astype(np.float32)
+        else:
+            obs = episode['image'][idx - self._frame_stack + 1 : idx + 1].astype(np.float32)
+            
+        if idx + 1 < self._frame_stack - 1:
+            first_frame = episode['image'][0]
+            curr_next_frame = episode['image'][idx + 1]
+            next_obs = np.concatenate([first_frame] * 2 + [curr_next_frame], axis=-1).astype(np.float32)
+        else:
+            next_obs = episode['image'][idx - self._frame_stack + 2 : idx + 2].astype(np.float32)
+        
         action = episode['action'][idx]
         reward = episode['reward'][idx]
-        next_obs = episode['image'][idx + 1].astype(np.float32)
         done = episode['is_terminal'][idx]
         
         return obs, action, reward, next_obs, done
