@@ -1,5 +1,4 @@
 import numpy as np
-import io
 import traceback
 import random
 from utils import get_gym_dataset
@@ -21,6 +20,22 @@ def load_episode(fn, relevant_keys):
         episode = np.load(f)
         episode = {k: episode[k] for k in relevant_keys}
         return episode
+
+def get_mujoco_dataset_transformations(dataset):
+    '''Get normalization constants for the D4RL dataset we are working with.'''
+    observations = dataset["observations"]
+    actions = dataset["actions"]
+    next_observations = dataset["next_observations"]
+
+    state_mean = np.mean(observations, axis=0).astype(np.float32)
+    action_mean = np.mean(actions, axis=0).astype(np.float32)
+    next_state_mean = np.mean(next_observations, axis=0).astype(np.float32)
+
+    state_scale = np.abs(observations - state_mean).mean(axis=0).astype(np.float32) + 1e-8
+    action_scale = np.abs(actions - action_mean).mean(axis=0).astype(np.float32) + 1e-8
+    next_state_scale = np.abs(next_observations - next_state_mean).mean(axis=0).astype(np.float32) + 1e-8
+
+    return state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale
 
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
@@ -143,10 +158,15 @@ class VD4RLTransitionReplayBuffer:
         return obs, action, reward, next_obs, done
     
 class D4RLSequenceReplayBuffer:
-    def __init__(self, env_name, capability, seq_len):
+    def __init__(self, env_name, capability, seq_len, normalize=True):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
         self.n_samples = self.dataset['observations'].shape[0]
         self._seq_len = seq_len
+
+        self.normalize = normalize
+        if normalize:
+            means_scales = get_mujoco_dataset_transformations(self.dataset)
+            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale = means_scales
         
     def _sample(self):
         # sampling full sequence
@@ -156,13 +176,24 @@ class D4RLSequenceReplayBuffer:
         reward = self.dataset['rewards'][idx : idx + self._seq_len]
         next_obs = self.dataset['next_observations'][idx : idx + self._seq_len]
         done = self.dataset['terminals'][idx : idx + self._seq_len]
+
+        # normalize if specified
+        if self.normalize:
+            obs = (obs - self.state_mean) / self.state_scale
+            action = (action - self.action_mean) / self.action_scale
+            next_obs = (next_obs - self.next_state_mean) / self.next_state_scale
         
         return obs, action, reward, next_obs, done
 
 class D4RLTransitionReplayBuffer:
-    def __init__(self, env_name, capability):
+    def __init__(self, env_name, capability, normalize=True):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
         self.n_samples = self.dataset['observations'].shape[0]
+
+        self.normalize = normalize
+        if normalize:
+            means_scales = get_mujoco_dataset_transformations(self.dataset)
+            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale = means_scales
         
     def _sample(self):
         # sampling single item
@@ -172,6 +203,12 @@ class D4RLTransitionReplayBuffer:
         reward = self.dataset['rewards'][idx]
         next_obs = self.dataset['next_observations'][idx]
         done = self.dataset['terminals'][idx]
+
+        # normalize if specified
+        if self.normalize:
+            obs = (obs - self.state_mean) / self.state_scale
+            action = (action - self.action_mean) / self.action_scale
+            next_obs = (next_obs - self.next_state_mean) / self.next_state_scale
         
         return obs, action, reward, next_obs, done
         

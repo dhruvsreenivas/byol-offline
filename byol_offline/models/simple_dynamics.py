@@ -29,7 +29,7 @@ class SimpleTrainState(NamedTuple):
     
 class SimpleDynamicsTrainer:
     '''Dynamics trainer similar to MILO.'''
-    def __init__(self, cfg, state_mean, action_mean, diff_mean, state_scale, action_scale, diff_scale):
+    def __init__(self, cfg):
         self.cfg = cfg
         
         if cfg.model_type == 'mlp_dynamics':
@@ -52,20 +52,12 @@ class SimpleDynamicsTrainer:
         )
         
         self.transform = cfg.transform
-        self.state_mean = state_mean
-        self.action_mean = action_mean
-        self.diff_mean = diff_mean
-        self.state_scale = state_scale
-        self.action_scale = action_scale
-        self.diff_scale = diff_scale
-        
         self.train_for_diff = cfg.train_for_diff
         
     @functools.partial(jax.jit, static_argnames=('self',))
     def loss_fn(self, params, transitions):
         outputs = self.model.apply(params, transitions.obs, transitions.actions)
         targets = jnp.where(self.train_for_diff, transitions.next_obs - transitions.obs, transitions.next_obs)
-        targets = jnp.where(self.transform, (targets - self.diff_mean) / (self.diff_scale + 1e-8), targets)
         
         loss = jnp.mean(jnp.square(outputs - targets))
         return loss
@@ -73,14 +65,6 @@ class SimpleDynamicsTrainer:
     @functools.partial(jax.jit, static_argnames=('self',))
     def update(self, transitions, step):
         del step
-        
-        # normalize transitions
-        new_obs = (transitions.obs - self.state_mean) / (self.state_scale + 1e-8)
-        new_actions = (transitions.actions - self.action_mean) / (self.action_scale + 1e-8)
-        transitions = transitions._replace(
-            obs=new_obs,
-            actions=new_actions
-        )
         
         loss_grad_fn = jax.value_and_grad(self.loss_fn)
         loss, grads = loss_grad_fn(self.train_state.params, transitions)

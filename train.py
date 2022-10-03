@@ -87,7 +87,7 @@ class Workspace:
             rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl)
+            rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.transform)
         self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # BYOL dataloader
@@ -95,7 +95,7 @@ class Workspace:
             byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len)
+            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.transform)
         self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
 
         # RL agent dataloader
@@ -111,7 +111,7 @@ class Workspace:
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
             
         # simple modeling for sanity checking
-        self.simple_single_step_dynamics_model = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
+        self.simple_dynamics_trainer = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
@@ -255,8 +255,21 @@ class Workspace:
     # ==================== SANITY CHECKING ====================
     
     def train_simple(self):
-        pass
-                
+        '''Train simple dynamics model.'''
+        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
+            epoch_metrics = defaultdict(AverageMeter)
+            for batch in self.rnd_dataloader:
+                transitions = Transition(*batch)
+                obs = batch[0]
+                self.simple_dynamics_trainer.train_state, metrics = self.simple_dynamics_trainer.update(transitions, self.global_step)
+
+                for k, v in metrics.items():
+                    epoch_metrics[k].update(v, obs.shape[0])
+
+                if self.cfg.wandb:
+                    log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                    wandb.log(log_dump)
+
 @hydra.main(config_path='./cfgs', config_name='config')
 def main(cfg):
     workspace = Workspace(cfg)

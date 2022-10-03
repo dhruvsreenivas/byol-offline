@@ -27,6 +27,9 @@ hidden_dim: 128
 dreamer: true
 depth: 32
 
+# dataset args
+transform: true
+
 # reward augmentations
 reward_aug: rnd
 
@@ -97,7 +100,7 @@ simple_dynamics:
   optim: sgd
   lr: 1e-4
   train_for_diff: true
-  transform: true
+  transform: ${transform}
 
 
 hydra:
