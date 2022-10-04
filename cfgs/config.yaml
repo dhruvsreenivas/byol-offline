@@ -21,6 +21,7 @@ model_batch_size: 50
 seq_len: 50
 max_steps: 100000
 
+# world model args
 feature_dim: 200
 hidden_dim: 128
 
@@ -28,7 +29,7 @@ dreamer: true
 depth: 32
 
 # dataset args
-transform: true
+normalize_inputs: true
 
 # reward augmentations
 reward_aug: rnd
@@ -91,8 +92,10 @@ rnd:
     obs_shape: ${obs_shape}
     hidden_dim: ${hidden_dim}
     repr_dim: 50
+    preprocess: true
 
 simple_dynamics:
+  seed: ${seed}
   model_type: mlp_dynamics
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}

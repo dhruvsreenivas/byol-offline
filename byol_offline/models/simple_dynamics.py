@@ -33,7 +33,7 @@ class SimpleDynamicsTrainer:
         self.cfg = cfg
         
         if cfg.model_type == 'mlp_dynamics':
-            model_fn = lambda x: MLPDynamicsModel(cfg.obs_shape[0], cfg.hidden_dim, act='relu')(x)
+            model_fn = lambda s, a: MLPDynamicsModel(cfg.obs_shape[0], cfg.hidden_dim, act='relu')(s, a)
         else:
             raise NotImplementedError("haven't implemented more complicated models yet. Starting simple :)")
 
@@ -41,7 +41,7 @@ class SimpleDynamicsTrainer:
         
         # initialization
         key = jax.random.PRNGKey(cfg.seed)
-        params = self.model.init(key, jnp.zeros((1,) + cfg.obs_shape), jnp.zeros((1,) + cfg.action_shape))
+        params = self.model.init(key, jnp.zeros((1,) + tuple(cfg.obs_shape)), jnp.zeros((1,) + tuple(cfg.action_shape)))
         
         self.opt = optax.sgd(cfg.lr, momentum=0.9, nesterov=True) if cfg.optim == 'sgd' else optax.adam(cfg.lr)
         opt_state = self.opt.init(params)
@@ -51,7 +51,6 @@ class SimpleDynamicsTrainer:
             opt_state=opt_state
         )
         
-        self.transform = cfg.transform
         self.train_for_diff = cfg.train_for_diff
         
     @functools.partial(jax.jit, static_argnames=('self',))

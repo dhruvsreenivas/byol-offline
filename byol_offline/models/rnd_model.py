@@ -27,7 +27,7 @@ class ConvRNDModel(hk.Module):
             
         self.predictor = RNDPredictor(cfg)
         
-    def __call__(self, obs):
+    def __call__(self, obs, is_training=True):
         # Observations are expected to be of size (B, H, W, C)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
@@ -37,14 +37,19 @@ class MLPRNDModel(hk.Module):
         super().__init__()
         
         # net
-        self.encoder = hk.nets.MLP(
-            [cfg.hidden_dim, cfg.hidden_dim],
-            activation=jax.nn.swish
-        )
+        if cfg.preprocess:
+            # MOPO-like encoder
+            self.encoder = hk.nets.MLP(
+                [cfg.hidden_dim, cfg.hidden_dim],
+                activation=jax.nn.swish
+            )
+        else:
+            self.encoder = lambda x: x
         
         self.predictor = RNDPredictor(cfg)
     
     def __call__(self, obs):
+        # normalize obs if needed (TODO add hk.BatchNorm)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
     
