@@ -83,12 +83,17 @@ class Workspace:
             self.byol_trainer.load(model_path)
             
         # RND dataloader
-        if self.cfg.task not in MUJOCO_ENVS:
-            rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
+        if self.cfg.sample_batches:
+            if self.cfg.task not in MUJOCO_ENVS:
+                rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
+            else:
+                lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+                rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs)
+            self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
+            assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs)
-        self.rnd_dataloader = rnd_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+            self.rnd_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size)
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
@@ -96,13 +101,14 @@ class Workspace:
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs)
-        self.byol_dataloader = byol_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        # TODO make BYOL dataloader iterative
 
         # RL agent dataloader
         if self.cfg.train_byol:
-            self.agent_dataloader = byol_dataloader(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+            self.agent_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         else:
-            self.agent_dataloader = rnd_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+            self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         
         # RL agent
         if self.cfg.learner == 'ddpg':

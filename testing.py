@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import jax
 import jax.numpy as jnp
 import haiku as hk
@@ -34,23 +37,23 @@ def test_world_model(cfg):
 
     _ = wm.apply(params, obs, actions)
 
-def test_dataloading(d4rl=True, byol=True):
+def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
     if d4rl:
         if byol:
             buffer = D4RLSequenceReplayBuffer('hopper', 'medium', 25)
-            dataloader = byol_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = byol_sampling_dataloader(buffer, max_steps=200, batch_size=20)
         else:
             buffer = D4RLTransitionReplayBuffer('hopper', 'medium')
-            dataloader = rnd_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     else:
         data_path = Path('./offline_data/cheetah_run/med_exp')
         if byol:
             buffer = VD4RLSequenceReplayBuffer(data_path, 25)
-            dataloader = byol_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = byol_sampling_dataloader(buffer, max_steps=200, batch_size=20)
         else:
             buffer = VD4RLTransitionReplayBuffer(data_path)
-            dataloader = rnd_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     
     for epoch in range(10):
         print(f'starting epoch {epoch + 1}')
@@ -62,7 +65,21 @@ def test_dataloading(d4rl=True, byol=True):
             print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
             print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
             print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
-            print('-' * 50)
+            print('*' * 50)
+            
+def test_iterative_dataloading():
+    name = 'hopper'
+    capability = 'medium'
+    loader = rnd_iterative_dataloader(name, capability, batch_size=128)
 
+    for batch in loader:
+        print('*' * 50)
+        obs, action, reward, next_obs, done = batch
+        print(f'obs info: shape: {obs.shape}, dtype: {obs.dtype}')
+        print(f'action info: shape: {action.shape}, dtype: {action.dtype}')
+        print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
+        print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
+        print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
+        
 if __name__ == '__main__':
-    test_dataloading()
+    test_iterative_dataloading()

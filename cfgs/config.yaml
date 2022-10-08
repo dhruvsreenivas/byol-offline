@@ -30,6 +30,7 @@ depth: 32
 
 # dataset args
 normalize_inputs: true
+sample_batches: false
 
 # reward augmentations
 reward_aug: rnd

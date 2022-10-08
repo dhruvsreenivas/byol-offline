@@ -20,6 +20,9 @@ def load_episode(fn, relevant_keys):
         episode = np.load(f)
         episode = {k: episode[k] for k in relevant_keys}
         return episode
+    
+def get_dataset_size(dataset):
+    return dataset['observations'].shape[0]
 
 def get_mujoco_dataset_transformations(dataset):
     '''Get normalization constants for the D4RL dataset we are working with.'''
@@ -238,10 +241,10 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
     done = tf.transpose(done, (1, 0))
     return obs, action, reward, next_obs, done
 
-def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffer,
-                    max_steps,
-                    batch_size,
-                    prefetch=True):
+def byol_sampling_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffer,
+                             max_steps,
+                             batch_size,
+                             prefetch=True):
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
@@ -264,14 +267,14 @@ def byol_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffe
         dataset = dataset.map(transpose_fn_state)
     
     if prefetch:
-        dataset = dataset.prefetch(10)
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
     return tfds.as_numpy(dataset)
 
-def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
-                   max_steps,
-                   batch_size,
-                   prefetch=True):
+def rnd_sampling_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
+                            max_steps,
+                            batch_size,
+                            prefetch=True):
     obs, action, reward, next_obs, done = buffer._sample()
     done = np.float32(done)
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
@@ -289,6 +292,28 @@ def rnd_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBu
     dataset = dataset.batch(batch_size, drop_remainder=True)
 
     if prefetch:
-        dataset = dataset.prefetch(10)
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    
+    return tfds.as_numpy(dataset)
+
+def d4rl_dict_to_tuple(dict_batch):
+    batch = []
+    for k in ['observations', 'actions', 'rewards', 'next_observations', 'terminals']:
+        v = dict_batch[k]
+        batch.append(tf.cast(v, dtype=tf.float32))
+    return tuple(batch)
+
+def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, prefetch=True):
+    dataset = get_gym_dataset(dataset_name, dataset_capability)
+    n_examples = get_dataset_size(dataset)
+    print(f'dataset size: {n_examples}')
+    
+    dataset = tf.data.Dataset.from_tensor_slices(dataset)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.map(d4rl_dict_to_tuple)
+    dataset = dataset.shuffle(buffer_size=n_examples, seed=0) # perfect shuffling
+    
+    if prefetch:
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
     return tfds.as_numpy(dataset)
