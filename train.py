@@ -102,13 +102,17 @@ class Workspace:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs)
         self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
-        # TODO make BYOL dataloader iterative
+        # TODO make BYOL dataloader iterative if needed
 
         # RL agent dataloader
         if self.cfg.train_byol:
             self.agent_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         else:
-            self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+            if self.cfg.sample_batches:
+                self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+            else:
+                lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+                self.agent_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size)
         
         # RL agent
         if self.cfg.learner == 'ddpg':
