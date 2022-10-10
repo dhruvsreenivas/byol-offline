@@ -279,6 +279,17 @@ class Workspace:
                 if self.cfg.wandb:
                     log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                     wandb.log(log_dump)
+                    
+    def train_one_datapoint(self):
+        '''Train on one datapoint because JAX sucks. Loss should converge to 0.'''
+        self.rng, subkey = jax.random.split(self.rng)
+        rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + self.cfg.obs_shape)
+        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
+            metrics = self.rnd_trainer.update(rand_datapoint, self.global_step)
+            
+            if self.cfg.wandb:
+                wandb.log(metrics)
+                
 
 @hydra.main(config_path='./cfgs', config_name='config')
 def main(cfg):

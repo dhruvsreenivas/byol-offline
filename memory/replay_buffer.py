@@ -311,7 +311,7 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, prefe
     dataset = tf.data.Dataset.from_tensor_slices(dataset)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.map(d4rl_dict_to_tuple)
-    dataset = dataset.shuffle(buffer_size=n_examples, seed=0) # perfect shuffling
+    dataset = dataset.shuffle(buffer_size=n_examples, seed=0, reshuffle_each_iteration=True) # perfect shuffling
     
     if prefetch:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)

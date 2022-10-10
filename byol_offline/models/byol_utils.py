@@ -21,5 +21,6 @@ def sliding_window(arr: jnp.ndarray, idx: int, window_size: int):
     return masked_arr
 
 def target_update_fn(params: hk.Params, target_params: hk.Params, ema: float) -> hk.Params:
+    # can also use optax.incremental_update
     new_target_params = jax.tree_util.tree_map(lambda x, y: ema * x + (1.0 - ema) * y, target_params, params)
     return new_target_params
