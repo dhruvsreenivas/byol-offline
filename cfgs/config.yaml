@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - task@_global_: ???
-  - learner@_global_: ???
+  - learner@_global_: ddpg
 
 project_name: ???
 seed: 0
@@ -80,20 +80,18 @@ rnd:
   task: ${task}
   seed: ${seed}
   obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
   lr: 1e-3
 
   vd4rl:
-    obs_shape: ${obs_shape}
     dreamer: ${dreamer}
     depth: ${depth}
     hidden_dim: ${hidden_dim}
     repr_dim: 50
   
   d4rl:
-    obs_shape: ${obs_shape}
     hidden_dim: ${hidden_dim}
     repr_dim: 50
-    preprocess: true
 
 simple_dynamics:
   seed: ${seed}

@@ -12,7 +12,7 @@ class MLPDynamicsModel(hk.Module):
         super().__init__(name='simple_mlp_dynamics')
         self._state_dim = state_dim
         self._hidden_size = hidden_size
-        self._activation = jax.nn.relu if act == 'relu' else jax.lax.tanh
+        self._activation = jax.nn.relu if act == 'relu' else jnp.tanh
     
     def __call__(self, obs, action):
         obs_action = jnp.concatenate([obs, action], -1)

@@ -2,13 +2,13 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import jax
-from tqdm import tqdm
+from tqdm import trange
 from pathlib import Path
 import hydra
 from hydra.utils import to_absolute_path
 from collections import defaultdict
 import wandb
-import datetime
+from datetime import datetime
 
 from byol_offline.models import *
 from byol_offline.agents import *
@@ -130,11 +130,10 @@ class Workspace:
     
     def train_byol(self):
         '''Train BYOL-Explore latent world model offline.'''
-        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
+        for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, _, _, _ = batch
-                print(obs.dtype, actions.dtype)
                 self.byol_trainer.train_state, batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
                 
                 for k, v in batch_metrics.items():
@@ -150,7 +149,7 @@ class Workspace:
                 
     def train_rnd(self):
         '''Train RND model offline.'''
-        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
+        for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
                 obs, _, _, _, _ = batch
@@ -237,7 +236,7 @@ class Workspace:
         '''Train offline RL agent.'''
         eval_every = Every(self.cfg.policy_eval_every)
         save_every = Every(self.cfg.model_save_every)
-        for epoch in tqdm(range(1, self.cfg.policy_train_epochs + 1)):
+        for epoch in trange(1, self.cfg.policy_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.agent_dataloader:
                 transitions = Transition(*batch)
@@ -246,7 +245,7 @@ class Workspace:
                 batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, batch_size)
-
+                
                 self.global_step += 1
                 
             if self.cfg.wandb:
@@ -266,7 +265,7 @@ class Workspace:
     
     def train_simple(self):
         '''Train simple dynamics model.'''
-        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
+        for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
                 transitions = Transition(*batch)
@@ -281,11 +280,12 @@ class Workspace:
                     wandb.log(log_dump)
                     
     def train_one_datapoint(self):
-        '''Train on one datapoint because JAX sucks. Loss should converge to 0.'''
+        '''Train on one datapoint because JAX sucks. Loss SHOULD converge to 0.'''
         self.rng, subkey = jax.random.split(self.rng)
-        rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + self.cfg.obs_shape)
-        for epoch in tqdm(range(1, self.cfg.model_train_epochs + 1)):
-            metrics = self.rnd_trainer.update(rand_datapoint, self.global_step)
+        rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + tuple(self.cfg.obs_shape), dtype=jnp.float32)
+        for epoch in trange(1, self.cfg.model_train_epochs + 1):
+            self.rnd_trainer.train_state, metrics = self.rnd_trainer.update(rand_datapoint, self.global_step)
+            print(f'metrics for epoch {epoch}:  {metrics["rnd_loss"]}')
             
             if self.cfg.wandb:
                 wandb.log(metrics)
@@ -302,7 +302,7 @@ def main(cfg):
     
     entity = 'dhruv_sreenivas'
     project_name = cfg.project_name
-    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     import sys
 
     name = f"{ts}"
@@ -310,6 +310,7 @@ def main(cfg):
     for x in override_args:
         name += f"|{x}"
         
+    # training functions
     def train_model():
         if cfg.train_byol:
             workspace.train_byol()
@@ -321,12 +322,19 @@ def main(cfg):
             workspace.train_agent()
         else:
             train_model()
+            
+    def sanity_check():
+        if cfg.load_model:
+            workspace.train_one_datapoint()
+        else:
+            workspace.train_simple()
     
+    # actual training + sanity checking
     if cfg.wandb:
         with wandb.init(project=project_name, entity=entity, name=name) as run:
-            train()
+            sanity_check()
     else:
-        train()
+        sanity_check()
         
 if __name__ == '__main__':
     main()

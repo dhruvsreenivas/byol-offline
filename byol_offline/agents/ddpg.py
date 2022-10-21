@@ -150,7 +150,7 @@ class DDPG:
         dist = self.actor.apply(actor_params, features, std)
         
         sampled_actions = dist.sample(seed=key, clip=self.std_clip_val)
-        loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, similar to DrQ+BC
+        loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, exactly like DrQ + BC
         return loss
     
     @functools.partial(jax.jit, static_argnames=('self',))

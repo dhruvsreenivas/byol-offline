@@ -306,7 +306,6 @@ def d4rl_dict_to_tuple(dict_batch):
 def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, prefetch=True):
     dataset = get_gym_dataset(dataset_name, dataset_capability)
     n_examples = get_dataset_size(dataset)
-    print(f'dataset size: {n_examples}')
     
     dataset = tf.data.Dataset.from_tensor_slices(dataset)
     dataset = dataset.batch(batch_size, drop_remainder=True)

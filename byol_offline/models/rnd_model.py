@@ -27,7 +27,7 @@ class ConvRNDModel(hk.Module):
             
         self.predictor = RNDPredictor(cfg)
         
-    def __call__(self, obs, is_training=True):
+    def __call__(self, obs):
         # Observations are expected to be of size (B, H, W, C)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
@@ -36,20 +36,13 @@ class MLPRNDModel(hk.Module):
     def __init__(self, cfg):
         super().__init__()
         
-        # net
-        if cfg.preprocess:
-            # MOPO-like encoder
-            self.encoder = hk.nets.MLP(
-                [cfg.hidden_dim, cfg.hidden_dim],
-                activation=jax.nn.swish
-            )
-        else:
-            self.encoder = lambda x: x
-        
+        self.encoder = hk.nets.MLP(
+            [cfg.hidden_dim, cfg.hidden_dim],
+            activation=jax.nn.swish
+        )
         self.predictor = RNDPredictor(cfg)
     
     def __call__(self, obs):
-        # normalize obs if needed (TODO add hk.BatchNorm)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
     
@@ -59,9 +52,9 @@ class RNDModelTrainer:
         self.cfg = cfg
         
         if cfg.task in MUJOCO_ENVS:
-            rnd_fn = lambda obs: MLPRNDModel(cfg.d4rl)(obs)
+            rnd_fn = lambda o: MLPRNDModel(cfg.d4rl)(o)
         else:
-            rnd_fn = lambda obs: ConvRNDModel(cfg.vd4rl)(obs)
+            rnd_fn = lambda o: ConvRNDModel(cfg.vd4rl)(o)
         
         self.rnd = hk.without_apply_rng(hk.transform(rnd_fn))
         
