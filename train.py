@@ -280,7 +280,7 @@ class Workspace:
                     wandb.log(log_dump)
                     
     def train_one_datapoint(self):
-        '''Train on one datapoint because JAX sucks. Loss SHOULD converge to 0.'''
+        '''Train on one datapoint because JAX is being weird. Loss SHOULD converge to 0.'''
         self.rng, subkey = jax.random.split(self.rng)
         rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + tuple(self.cfg.obs_shape), dtype=jnp.float32)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
