@@ -10,6 +10,8 @@ from pathlib import Path
 from byol_offline.models import *
 from memory.replay_buffer import *
 
+'''Various testing to make sure core machinery works.'''
+
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model(cfg):
     # Make sure print statements are enabled in WM __call__ function to print out state when running this method

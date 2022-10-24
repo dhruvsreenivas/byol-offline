@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import haiku as hk
 import optax
 import dill
-import functools
 from typing import NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
@@ -51,6 +50,7 @@ class RNDModelTrainer:
     def __init__(self, cfg):
         self.cfg = cfg
         
+        # initialize here before defining all loss/update fns
         if cfg.task in MUJOCO_ENVS:
             rnd_fn = lambda o: MLPRNDModel(cfg.d4rl)(o)
         else:
@@ -75,52 +75,54 @@ class RNDModelTrainer:
             opt_state=rnd_opt_state
         )
     
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def rnd_loss_fn(self, params, target_params, obs):
-        output = self.rnd.apply(params, obs)
-        target_output = self.rnd.apply(target_params, obs)
-        
-        # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
-        return jnp.mean(jnp.square(target_output - output))
+        @jax.jit
+        def rnd_loss_fn(params, target_params, obs):
+            output = self.rnd.apply(params, obs)
+            target_output = self.rnd.apply(target_params, obs)
+            
+            # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
+            return jnp.mean(jnp.square(target_output - output))
     
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def update(self, obs, step):
-        del step
+        def update(train_state: RNDTrainState, obs: jnp.ndarray, step: int):
+            del step
+            
+            loss_grad_fn = jax.value_and_grad(rnd_loss_fn)
+            loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs)
+            
+            update, new_opt_state = self.rnd_opt.update(grads, train_state.opt_state)
+            new_params = optax.apply_updates(self.train_state.params, update)
+            
+            metrics = {
+                'rnd_loss': loss
+            }
+            
+            new_train_state = RNDTrainState(
+                params=new_params,
+                target_params=train_state.target_params,
+                opt_state=new_opt_state
+            )
         
-        loss_grad_fn = jax.value_and_grad(self.rnd_loss_fn)
-        loss, grads = loss_grad_fn(self.train_state.params, self.train_state.target_params, obs)
-        
-        update, new_opt_state = self.rnd_opt.update(grads, self.train_state.opt_state)
-        new_params = optax.apply_updates(self.train_state.params, update)
-        
-        metrics = {
-            'rnd_loss': loss
-        }
-        
-        new_train_state = RNDTrainState(
-            params=new_params,
-            target_params=self.train_state.target_params,
-            opt_state=new_opt_state
-        )
-        
-        return new_train_state, metrics
+            return new_train_state, metrics
     
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def compute_uncertainty(self, obs, actions, step):
-        '''Computes RND uncertainty bonus.'''
-        del step
-        del actions
+        def compute_uncertainty(obs, actions, step):
+            '''Computes RND uncertainty bonus.'''
+            del step
+            del actions
+            
+            online_output = self.rnd.apply(self.train_state.params, obs)
+            target_output = self.rnd.apply(self.train_state.target_params, obs)
+            
+            squared_diff = jnp.square(target_output - online_output).sum(-1)
+            return jax.lax.stop_gradient(squared_diff)
         
-        online_output = self.rnd.apply(self.train_state.params, obs)
-        target_output = self.rnd.apply(self.train_state.target_params, obs)
-        
-        squared_diff = jnp.square(target_output - online_output).sum(-1)
-        return jax.lax.stop_gradient(squared_diff)
+        # define update + uncertainty computation
+        self._update = jax.jit(update)
+        self._compute_uncertainty = jax.jit(compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:
             dill.dump(self.train_state, f, protocol=2)
-            
+        
     def load(self, model_path):
         try:
             with open(model_path, 'rb') as f:
@@ -129,4 +131,5 @@ class RNDModelTrainer:
         except FileNotFoundError:
             print('cannot load RND model')
             exit()
+        
         

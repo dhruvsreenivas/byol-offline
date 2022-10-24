@@ -123,89 +123,95 @@ class WorldModelTrainer:
         if cfg.pmap:
             self.update = functools.partial(jax.pmap, static_broadcasted_argnums=(0, 1))(self.update)
     
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def wm_loss_fn_window_size(self,
-                               wm_params: hk.Params,
-                               target_params: hk.Params,
-                               obs_seq: jnp.ndarray,
-                               action_seq: jnp.ndarray,
-                               window_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        
-        T, B = obs_seq.shape[:2]
+        # define loss functions + update functions
+        @jax.jit
+        def wm_loss_fn_window_size(wm_params: hk.Params,
+                                   target_params: hk.Params,
+                                   obs_seq: jnp.ndarray,
+                                   action_seq: jnp.ndarray,
+                                   window_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            
+            T, B = obs_seq.shape[:2]
 
-        # don't need to do for all idxs that work, we just do it for index T - window_size so we don't multiple count the same losses
-        starting_idx = T - window_size
-        obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
-        action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
-        
-        pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
-        pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
+            # don't need to do for all idxs that work, we just do it for index T - window_size so we don't multiple count the same losses
+            starting_idx = T - window_size
+            obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
+            action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
+            
+            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
+            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-        _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
-        target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
+            _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
+            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
 
-        # normalize latents
-        pred_latents = l2_normalize(pred_latents, axis=-1)
-        target_latents = l2_normalize(target_latents, axis=-1)
+            # normalize latents
+            pred_latents = l2_normalize(pred_latents, axis=-1)
+            target_latents = l2_normalize(target_latents, axis=-1)
 
-        # take L2 loss
-        mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
-        mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
-        mses = sliding_window(mses, 0, window_size) # zeros out losses we don't care about (i.e. past window size)
-        mses = jnp.roll(mses, shift=starting_idx, axis=0)
-        loss_vec = jnp.sum(mses, -1) # (T, B)
-        return jnp.mean(loss_vec), loss_vec
-    
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def wm_loss_fn(self,
-                   wm_params: hk.Params,
-                   target_params: hk.Params,
-                   obs_seq: jnp.ndarray,
-                   action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            # take L2 loss
+            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
+            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
+            mses = sliding_window(mses, 0, window_size) # zeros out losses we don't care about (i.e. past window size)
+            mses = jnp.roll(mses, shift=starting_idx, axis=0)
+            loss_vec = jnp.sum(mses, -1) # (T, B)
+            return jnp.mean(loss_vec), loss_vec
         
-        T, B = obs_seq.shape[:2]
+        @jax.jit
+        def wm_loss_fn(wm_params: hk.Params,
+                       target_params: hk.Params,
+                       obs_seq: jnp.ndarray,
+                       action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            
+            T, B = obs_seq.shape[:2]
 
-        def ws_body_fn(ws, curr_state):
-            curr_loss, curr_loss_window = curr_state
-            loss, loss_window = self.wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, ws)
-            return curr_loss + loss, curr_loss_window + loss_window
+            def ws_body_fn(ws, curr_state):
+                curr_loss, curr_loss_window = curr_state
+                loss, loss_window = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, ws)
+                return curr_loss + loss, curr_loss_window + loss_window
+            
+            init_state = (0.0, jnp.zeros((T, B)))
+            total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
+            return total_loss / T, total_loss_window / T # take avgs
         
-        init_state = (0.0, jnp.zeros((T, B)))
-        total_loss, total_loss_window = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
-        return total_loss / T, total_loss_window / T # take avgs
-    
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def update(self, obs, actions, step):
-        del step
+        def update(train_state: BYOLTrainState,
+                   obs: jnp.ndarray,
+                   actions: jnp.ndarray,
+                   step: int):
+            del step
+            
+            loss_grad_fn = jax.value_and_grad(wm_loss_fn, has_aux=True)
+            (loss, _), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions)
+            
+            update, new_opt_state = self.wm_opt.update(grads, train_state.wm_opt_state)
+            new_params = optax.apply_updates(train_state.wm_params, update)
+            
+            new_target_params = target_update_fn(new_params, train_state.target_params, self.ema)
+            
+            metrics = {
+                'wm_loss': loss
+            }
+            
+            new_train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
+            return new_train_state, metrics
         
-        loss_grad_fn = jax.value_and_grad(self.wm_loss_fn, has_aux=True)
-        (loss, _), grads = loss_grad_fn(self.train_state.wm_params, self.train_state.target_params, obs, actions)
+        def compute_uncertainty(train_state: BYOLTrainState,
+                                obs_seq: jnp.ndarray,
+                                action_seq: jnp.ndarray,
+                                step: int):
+            '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
+            
+            :param obs_seq: Sequence of observations, of shape (seq_len, B, obs_dim)
+            :param action_seq: Sequence of actions, of shape (seq_len, B, action_dim)
+            
+            :return uncertainties: Model uncertainties, of shape (seq_len, B).
+            '''
+            del step
+            _, losses = wm_loss_fn(train_state.wm_params, train_state.target_params, obs_seq, action_seq)
+            # losses are of shape (T, B), result of loss accumulation
+            return jax.lax.stop_gradient(losses)
         
-        update, new_opt_state = self.wm_opt.update(grads, self.train_state.wm_opt_state)
-        new_params = optax.apply_updates(self.train_state.wm_params, update)
-        
-        new_target_params = target_update_fn(new_params, self.train_state.target_params, self.ema)
-        
-        metrics = {
-            'wm_loss': loss
-        }
-        
-        new_train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
-        return new_train_state, metrics
-    
-    @functools.partial(jax.jit, static_argnames=('self',))
-    def compute_uncertainty(self, obs_seq, action_seq, step):
-        '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
-        
-        :param obs_seq: Sequence of observations, of shape (seq_len, B, obs_dim)
-        :param action_seq: Sequence of actions, of shape (seq_len, B, action_dim)
-        
-        :return uncertainties: Model uncertainties, of shape (seq_len, B).
-        '''
-        del step
-        _, losses = self.wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
-        # losses are of shape (T, B), result of loss accumulation
-        return losses
+        self._update = jax.jit(update)
+        self._compute_uncertainty = jax.jit(compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

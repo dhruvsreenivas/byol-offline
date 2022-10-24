@@ -134,7 +134,8 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, _, _, _ = batch
-                self.byol_trainer.train_state, batch_metrics = self.byol_trainer.update(obs, actions, self.global_step)
+                new_train_state, batch_metrics = self.byol_trainer._update(self.byol_trainer.train_state, obs, actions, self.global_step)
+                self.byol_trainer.train_state = new_train_state
                 
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, obs.shape[1]) # want to log per batch
@@ -153,7 +154,8 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
                 obs, _, _, _, _ = batch
-                self.rnd_trainer.train_state, batch_metrics = self.rnd_trainer.update(obs, self.global_step)
+                new_train_state, batch_metrics = self.rnd_trainer._update(self.rnd_trainer.train_state, obs, self.global_step)
+                self.rnd_trainer.train_state = new_train_state
                 
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, obs.shape[0])
@@ -169,6 +171,7 @@ class Workspace:
     # ==================== TRAINING AGENT ====================
                 
     def eval_agent_mujoco(self):
+        '''Evaluates agent in MuJoCo envs.'''
         episode_rewards = []
         episode_count = 0
         episode_until = Until(self.cfg.num_eval_episodes)
@@ -178,7 +181,7 @@ class Workspace:
             done = False
             episode_reward = 0.0
             while not done:
-                action = self.agent.act(ob, self.global_step, eval_mode=True)
+                action = self.agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
 
                 n_ob, r, done, _ = self.eval_env.step(action)
@@ -197,6 +200,7 @@ class Workspace:
             wandb.log(metrics)
 
     def eval_agent_dmc(self):
+        '''Evaluates agent in DMC envs.'''
         episode_rewards = []
         episode_count = 0
         episode_until = Until(self.cfg.num_eval_episodes)
@@ -207,7 +211,7 @@ class Workspace:
             episode_reward = 0.0
             while not done:
                 ob = time_step.observation
-                action = self.agent.act(ob, self.global_step, eval_mode=True)
+                action = self.agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
 
                 time_step = self.eval_env.step(action)
@@ -236,11 +240,13 @@ class Workspace:
         '''Train offline RL agent.'''
         eval_every = Every(self.cfg.policy_eval_every)
         save_every = Every(self.cfg.model_save_every)
+        
         for epoch in trange(1, self.cfg.policy_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.agent_dataloader:
                 transitions = Transition(*batch)
-                batch_metrics = self.agent.update(transitions, self.global_step)
+                new_train_state, batch_metrics = self.agent._update(self.agent.train_state, transitions, self.global_step)
+                self.agent.train_state = new_train_state
                 
                 batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
                 for k, v in batch_metrics.items():
@@ -270,7 +276,8 @@ class Workspace:
             for batch in self.rnd_dataloader:
                 transitions = Transition(*batch)
                 obs = batch[0]
-                self.simple_dynamics_trainer.train_state, metrics = self.simple_dynamics_trainer.update(transitions, self.global_step)
+                new_train_state, metrics = self.simple_dynamics_trainer._update(self.simple_dynmaics_trainer.train_state, transitions, self.global_step)
+                self.simple_dynamics_trainer.train_state = new_train_state
 
                 for k, v in metrics.items():
                     epoch_metrics[k].update(v, obs.shape[0])
@@ -280,12 +287,12 @@ class Workspace:
                     wandb.log(log_dump)
                     
     def train_one_datapoint(self):
-        '''Train on one datapoint because JAX is being weird. Loss SHOULD converge to 0.'''
+        '''Train on one datapoint to make sure optimization goes down.'''
         self.rng, subkey = jax.random.split(self.rng)
         rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + tuple(self.cfg.obs_shape), dtype=jnp.float32)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
-            self.rnd_trainer.train_state, metrics = self.rnd_trainer.update(rand_datapoint, self.global_step)
-            print(f'metrics for epoch {epoch}:  {metrics["rnd_loss"]}')
+            new_train_state, metrics = self.rnd_trainer._update(self.rnd_trainer.train_state, rand_datapoint, self.global_step)
+            self.rnd_trainer.train_state = new_train_state
             
             if self.cfg.wandb:
                 wandb.log(metrics)
@@ -332,9 +339,9 @@ def main(cfg):
     # actual training + sanity checking
     if cfg.wandb:
         with wandb.init(project=project_name, entity=entity, name=name) as run:
-            sanity_check()
+            train()
     else:
-        sanity_check()
+        train()
         
 if __name__ == '__main__':
     main()
