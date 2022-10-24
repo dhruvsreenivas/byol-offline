@@ -61,6 +61,16 @@ def flatten_data(transitions):
     )
     return transitions
 
+def batched_zeros_like(shape):
+    if type(shape) == int:
+        return jnp.zeros((1, shape))
+    return jnp.zeros((1,) + tuple(shape))
+
+def seq_batched_zeros_like(shape):
+    if type(shape) == int:
+        return jnp.zeros((2, 1, shape))
+    return jnp.zeros((2, 1) + tuple(shape))
+
 # ================ GYM UTILS ================
 
 MUJOCO_ENVS = {

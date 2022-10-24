@@ -10,7 +10,7 @@ from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
-from utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS, seq_batched_zeros_like
 
 class BYOLTrainState(NamedTuple):
     wm_params: hk.Params
@@ -104,8 +104,8 @@ class WorldModelTrainer:
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
-        wm_params = self.wm.init(k1, jnp.zeros((2, 1) + tuple(cfg.obs_shape)), jnp.zeros((2, 1) + tuple(cfg.action_shape)))
-        target_params = self.wm.init(k2, jnp.zeros((2, 1) + tuple(cfg.obs_shape)), jnp.zeros((2, 1) + tuple(cfg.action_shape)))
+        wm_params = self.wm.init(k1, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
+        target_params = self.wm.init(k2, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
         
         # optimizer
         self.wm_opt = optax.adam(cfg.lr)

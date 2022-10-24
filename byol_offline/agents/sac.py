@@ -11,7 +11,7 @@ from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
-from utils import MUJOCO_ENVS, flatten_data
+from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
 
 class SACTrainState(NamedTuple):
     encoder_params: hk.Params
@@ -71,18 +71,18 @@ class SAC:
         rng = jax.random.PRNGKey(cfg.seed)
         key1, key2, key3, key4 = jax.random.split(rng, 4)
         
-        encoder_params = self.encoder.init(key1, jnp.zeros((1,) + tuple(cfg.obs_shape)))
+        encoder_params = self.encoder.init(key1, batched_zeros_like(cfg.obs_shape))
         
         if cfg.task not in MUJOCO_ENVS:
             if byol is None or cfg.reward_aug == 'rnd':
-                actor_params = self.actor.init(key2, jnp.zeros((1, 20000)), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 20000)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+                actor_params = self.actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
             else:
-                actor_params = self.actor.init(key2, jnp.zeros((1, 4096)), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 4096)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+                actor_params = self.actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
         else:
-            actor_params = self.actor.init(key2, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros(1))
-            critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+            actor_params = self.actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
+            critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
         
         log_alpha = jnp.asarray(0., dtype=jnp.float32)
         
@@ -125,7 +125,7 @@ class SAC:
         rng, key = jax.random.split(self.train_state.rng_key)
         
         encoder_params = self.train_state.encoder_params
-        features = self.encoder.apply(encoder_params, jnp.expand_dims(obs, 0)).squeeze()
+        features = self.encoder.apply(encoder_params, obs) # don't need batch dim here
 
         actor_params = self.train_state.actor_params
         dist = self.actor.apply(actor_params, features)

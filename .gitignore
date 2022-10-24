@@ -5,3 +5,4 @@ local_runs/
 logs/
 sub_files/
 *__pycache__*
+.DS_Store

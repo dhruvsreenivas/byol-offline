@@ -11,7 +11,7 @@ from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
-from utils import MUJOCO_ENVS, flatten_data
+from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
 
 class DDPGTrainState(NamedTuple):
     encoder_params: hk.Params
@@ -73,14 +73,14 @@ class DDPG:
         
         if cfg.task not in MUJOCO_ENVS:
             if byol is None or cfg.reward_aug == 'rnd':
-                actor_params = self.actor.init(key2, jnp.zeros((1, 20000)), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 20000)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+                actor_params = self.actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
             else:
-                actor_params = self.actor.init(key2, jnp.zeros((1, 4096)), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, 4096)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+                actor_params = self.actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
+                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
         else:
-            actor_params = self.actor.init(key2, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros(1))
-            critic_params = critic_target_params = self.critic.init(key3, jnp.zeros((1, cfg.hidden_dim)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+            actor_params = self.actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
+            critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
         
         # optimizers
         self.encoder_opt = optax.adam(cfg.encoder_lr)
@@ -114,6 +114,7 @@ class DDPG:
         self.update_every_steps = cfg.update_every_steps
         
     def stddev_schedule(self, step):
+        '''Linear standard deviation schedule.'''
         mix = jnp.clip(step / self.std_duration, 0.0, 1.0)
         return (1.0 - mix) * self.init_std + mix * self.final_std
         
@@ -122,7 +123,7 @@ class DDPG:
         rng, key = jax.random.split(self.train_state.rng_key)
         
         encoder_params = self.train_state.encoder_params
-        features = self.encoder.apply(encoder_params, jnp.expand_dims(obs, 0)).squeeze()
+        features = self.encoder.apply(encoder_params, obs) # don't need batch dim here
         
         std = self.stddev_schedule(step)
         actor_params = self.train_state.actor_params

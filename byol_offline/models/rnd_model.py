@@ -8,7 +8,7 @@ from typing import NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
-from utils import MUJOCO_ENVS
+from utils import MUJOCO_ENVS, batched_zeros_like
 
 class RNDTrainState(NamedTuple):
     params: hk.Params
@@ -62,8 +62,8 @@ class RNDModelTrainer:
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
-        rnd_params = self.rnd.init(k1, jnp.zeros((1,) + tuple(cfg.obs_shape)))
-        target_params = self.rnd.init(k2, jnp.zeros((1,) + tuple(cfg.obs_shape)))
+        rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape))
+        target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape))
         
         # optimizer
         self.rnd_opt = optax.adam(cfg.lr)
