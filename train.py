@@ -38,7 +38,7 @@ class Workspace:
         # model directories
         self.pretrained_byol_dir = Path(to_absolute_path('pretrained_models')) / 'byol' / self.cfg.task / self.cfg.level
         self.pretrained_byol_dir.mkdir(parents=True, exist_ok=True)
-        self.pretrained_rnd_dir = Path(to_absolute_path('pretrained_models')) / 'rnd' / self.cfg.task / self.cfg.level
+        self.pretrained_rnd_dir = Path(to_absolute_path('pretrained_models')) / 'rnd' / self.cfg.task / self.cfg.level / ('actions' if self.cfg.rnd.cat_actions else 'no_actions')
         self.pretrained_rnd_dir.mkdir(parents=True, exist_ok=True)
         
         # trained policy directory
