@@ -3,6 +3,7 @@ warnings.filterwarnings("ignore")
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import haiku as hk
 import hydra
 from pathlib import Path
@@ -69,19 +70,52 @@ def test_sampler_dataloading(d4rl=True, byol=True):
             print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
             print('*' * 50)
             
+def batch_eq(batch1, batch2):
+    obs1, act1, rew1, nobs1, d1 = batch1
+    obs2, act2, rew2, nobs2, d2 = batch2
+    
+    assert obs1.shape == obs2.shape
+    assert act1.shape == act2.shape
+    assert rew1.shape == rew2.shape
+    assert nobs1.shape == nobs2.shape
+    assert d1.shape == d2.shape
+    
+    obs_eq = np.all(obs1 == obs2)
+    act_eq = np.all(act1 == act2)
+    rew_eq = np.all(rew1 == rew2)
+    nobs_eq = np.all(nobs1 == nobs2)
+    d_eq = np.all(d1 == d2)
+    
+    assert obs_eq == act_eq == rew_eq == nobs_eq == d_eq
+    return obs_eq and act_eq and rew_eq and nobs_eq and d_eq
+            
 def test_iterative_dataloading():
     name = 'hopper'
     capability = 'medium'
-    loader = rnd_iterative_dataloader(name, capability, batch_size=128)
-
-    for batch in loader:
-        print('*' * 50)
-        obs, action, reward, next_obs, done = batch
-        print(f'obs info: shape: {obs.shape}, dtype: {obs.dtype}')
-        print(f'action info: shape: {action.shape}, dtype: {action.dtype}')
-        print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
-        print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
-        print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
+    loader = rnd_iterative_dataloader(name, capability, batch_size=1024)
+    
+    batches = []
+    for epoch in range(2):
+        count = 0
+        for batch in loader:
+            print('*' * 50)
+            obs, action, reward, next_obs, done = batch
+            
+            if epoch == 0:
+                print(f'obs info: shape: {obs.shape}, dtype: {obs.dtype}')
+                print(f'action info: shape: {action.shape}, dtype: {action.dtype}')
+                print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
+                print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
+                print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
+            
+            if epoch == 0:
+                batches.append(batch)
+            else:
+                # assert we're doing in different order
+                eq = batch_eq(batch, batches[count])
+                assert not eq, f"matched at count {count} -- if 0 this is not good haha"
+            
+            count += 1
         
 if __name__ == '__main__':
     test_iterative_dataloading()

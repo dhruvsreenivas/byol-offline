@@ -143,6 +143,9 @@ class Workspace:
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
+            else:
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                print_dict(log_dump)
             
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
                 model_path = self.pretrained_byol_dir / f'byol_{epoch}.pkl'
@@ -153,8 +156,8 @@ class Workspace:
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
-                obs, _, _, _, _ = batch
-                new_train_state, batch_metrics = self.rnd_trainer._update(self.rnd_trainer.train_state, obs, self.global_step)
+                obs, actions, _, _, _ = batch
+                new_train_state, batch_metrics = self.rnd_trainer._update(self.rnd_trainer.train_state, obs, actions, self.global_step)
                 self.rnd_trainer.train_state = new_train_state
                 
                 for k, v in batch_metrics.items():
@@ -163,6 +166,9 @@ class Workspace:
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
+            else:
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                print_dict(log_dump)
             
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
@@ -198,6 +204,8 @@ class Workspace:
         }
         if self.cfg.wandb:
             wandb.log(metrics)
+        else:
+            print_dict(metrics)
 
     def eval_agent_dmc(self):
         '''Evaluates agent in DMC envs.'''
@@ -227,8 +235,11 @@ class Workspace:
             'eval_rew_mean': np.mean(episode_rewards),
             'eval_rew_std': np.std(episode_rewards)
         }
+        
         if self.cfg.wandb:
             wandb.log(metrics)
+        else:
+            print_dict(metrics)
 
     def eval_agent(self):
         if self.cfg.task in MUJOCO_ENVS:
@@ -257,6 +268,9 @@ class Workspace:
             if self.cfg.wandb:
                 log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
+            else:
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                print_dict(log_dump)
             
             # save when necessary
             if self.cfg.save_model and save_every(epoch) == 0:
@@ -285,6 +299,9 @@ class Workspace:
                 if self.cfg.wandb:
                     log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                     wandb.log(log_dump)
+                else:
+                    log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                    print_dict(log_dump)
                     
     def train_one_datapoint(self):
         '''Train on one datapoint to make sure optimization goes down.'''
@@ -296,6 +313,8 @@ class Workspace:
             
             if self.cfg.wandb:
                 wandb.log(metrics)
+            else:
+                print_dict(metrics)
                 
 
 @hydra.main(config_path='./cfgs', config_name='config')

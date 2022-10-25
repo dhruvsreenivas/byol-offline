@@ -82,6 +82,7 @@ rnd:
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
   lr: 1e-3
+  cat_actions: false
 
   vd4rl:
     dreamer: ${dreamer}

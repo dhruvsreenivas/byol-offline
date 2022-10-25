@@ -4,6 +4,7 @@ import haiku as hk
 import optax
 import dill
 from typing import NamedTuple
+import functools
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
@@ -30,6 +31,14 @@ class ConvRNDModel(hk.Module):
         # Observations are expected to be of size (B, H, W, C)
         reprs = self.encoder(obs)
         return self.predictor(reprs)
+    
+class ConvRNDModelWithActions(ConvRNDModel):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        
+    def __call__(self, obs, actions):
+        oa = jnp.concatenate([obs, actions], axis=-1)
+        return super().__call__(oa)
 
 class MLPRNDModel(hk.Module):
     def __init__(self, cfg):
@@ -44,6 +53,14 @@ class MLPRNDModel(hk.Module):
     def __call__(self, obs):
         reprs = self.encoder(obs)
         return self.predictor(reprs)
+
+class MLPRNDModelWithActions(MLPRNDModel):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        
+    def __call__(self, obs, actions):
+        oa = jnp.concatenate([obs, actions], axis=-1)
+        return super().__call__(oa)
     
 class RNDModelTrainer:
     '''RND model trainer.'''
@@ -52,9 +69,15 @@ class RNDModelTrainer:
         
         # initialize here before defining all loss/update fns
         if cfg.task in MUJOCO_ENVS:
-            rnd_fn = lambda o: MLPRNDModel(cfg.d4rl)(o)
+            if cfg.cat_actions:
+                rnd_fn = lambda o, a: MLPRNDModelWithActions(cfg.d4rl)(o, a)
+            else:
+                rnd_fn = lambda o: MLPRNDModel(cfg.d4rl)(o)
         else:
-            rnd_fn = lambda o: ConvRNDModel(cfg.vd4rl)(o)
+            if cfg.cat_actions:
+                rnd_fn = lambda o, a: ConvRNDModelWithActions(cfg.vd4rl)(o, a)
+            else:
+                rnd_fn = lambda o: ConvRNDModel(cfg.vd4rl)(o)
         
         self.rnd = hk.without_apply_rng(hk.transform(rnd_fn))
         
@@ -62,8 +85,12 @@ class RNDModelTrainer:
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
-        rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape))
-        target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape))
+        if cfg.cat_actions:
+            rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
+            target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
+        else:
+            rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape))
+            target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape))
         
         # optimizer
         self.rnd_opt = optax.adam(cfg.lr)
@@ -82,12 +109,23 @@ class RNDModelTrainer:
             
             # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
             return jnp.mean(jnp.square(target_output - output))
+        
+        @jax.jit
+        def rnd_loss_fn_actions(params, target_params, obs, actions):
+            output = self.rnd.apply(params, obs, actions)
+            target_output = self.rnd.apply(target_params, obs, actions)
+            
+            return jnp.mean(jnp.square(target_output - output))
     
-        def update(train_state: RNDTrainState, obs: jnp.ndarray, step: int):
+        def update(train_state: RNDTrainState, obs: jnp.ndarray, actions: jnp.ndarray, step: int):
             del step
             
-            loss_grad_fn = jax.value_and_grad(rnd_loss_fn)
-            loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs)
+            if cfg.cat_actions:
+                loss_grad_fn = jax.value_and_grad(rnd_loss_fn_actions)
+                loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs, actions)
+            else:
+                loss_grad_fn = jax.value_and_grad(rnd_loss_fn)
+                loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs)
             
             update, new_opt_state = self.rnd_opt.update(grads, train_state.opt_state)
             new_params = optax.apply_updates(self.train_state.params, update)
@@ -107,10 +145,13 @@ class RNDModelTrainer:
         def compute_uncertainty(obs, actions, step):
             '''Computes RND uncertainty bonus.'''
             del step
-            del actions
             
-            online_output = self.rnd.apply(self.train_state.params, obs)
-            target_output = self.rnd.apply(self.train_state.target_params, obs)
+            if cfg.cat_actions:
+                online_output = self.rnd.apply(self.train_state.params, obs, actions)
+                target_output = self.rnd.apply(self.train_state.target_params, obs, actions)
+            else:
+                online_output = self.rnd.apply(self.train_state.params, obs)
+                target_output = self.rnd.apply(self.train_state.target_params, obs)
             
             squared_diff = jnp.square(target_output - online_output).sum(-1)
             return jax.lax.stop_gradient(squared_diff)

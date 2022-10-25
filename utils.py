@@ -71,6 +71,10 @@ def seq_batched_zeros_like(shape):
         return jnp.zeros((2, 1, shape))
     return jnp.zeros((2, 1) + tuple(shape))
 
+def print_dict(log_dict):
+    for k, v in log_dict.items():
+        print(f'{k}: {v}')
+
 # ================ GYM UTILS ================
 
 MUJOCO_ENVS = {
