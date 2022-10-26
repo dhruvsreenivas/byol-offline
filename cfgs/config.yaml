@@ -38,6 +38,10 @@ reward_aug: rnd
 # what to train
 load_model: false
 
+# bc warmstart args
+bc_warmstart: false
+bc_epochs: 100
+
 # policy training args
 policy_train_epochs: 1000
 policy_rb_capacity: 10000

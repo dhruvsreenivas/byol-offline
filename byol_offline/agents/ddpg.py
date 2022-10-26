@@ -56,13 +56,13 @@ class DDPG:
             assert type(rnd) == RNDModelTrainer, "Not an RND model trainer--BAD!"
             def reward_aug_fn(obs, acts):
                 # dummy step because we delete it anyway
-                return rnd.compute_uncertainty(obs, acts, 0)
+                return rnd._compute_uncertainty(obs, acts, 0)
         else:
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
             assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
             def reward_aug_fn(obs, acts):
                 # dummy step again because we delete it
-                return byol.compute_uncertainty(obs, acts, 0)
+                return byol._compute_uncertainty(obs, acts, 0)
         
         # initialization
         rng = jax.random.PRNGKey(cfg.seed)
@@ -119,7 +119,7 @@ class DDPG:
             mix = jnp.clip(step / self.std_duration, 0.0, 1.0)
             return (1.0 - mix) * self.init_std + mix * self.final_std
         
-        def act(obs: jnp.ndarray, step: int, eval_mode: bool = False):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool):
             '''Choose an action to execute in env.'''
             rng, key = jax.random.split(self.train_state.rng_key)
             
@@ -164,17 +164,17 @@ class DDPG:
             rng, key = jax.random.split(train_state.rng_key)
             
             loss_grad_fn = jax.value_and_grad(bc_loss, argnums=(0, 1))
-            loss, (encoder_grads, actor_grads) = loss_grad_fn(self.train_state.encoder_params, self.train_state.actor_params, transitions.obs, transitions.actions, key, step)
+            loss, (encoder_grads, actor_grads) = loss_grad_fn(train_state.encoder_params, train_state.actor_params, transitions.obs, transitions.actions, key, step)
             
             # encoder update
-            enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, self.train_state.encoder_opt_state)
-            new_enc_params = optax.apply_updates(self.train_state.encoder_params, enc_update)
+            enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
+            new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
             
             # actor update
-            act_update, new_act_opt_state = self.actor_opt.update(actor_grads, self.train_state.actor_opt_state)
-            new_actor_params = optax.apply_updates(self.train_state.actor_params, act_update)
+            act_update, new_act_opt_state = self.actor_opt.update(actor_grads, train_state.actor_opt_state)
+            new_actor_params = optax.apply_updates(train_state.actor_params, act_update)
             
-            new_train_state = self.train_state._replace(
+            new_train_state = train_state._replace(
                 encoder_params=new_enc_params,
                 actor_params=new_actor_params,
                 encoder_opt_state=new_enc_opt_state,
@@ -320,7 +320,7 @@ class DDPG:
             new_critic_params = optax.apply_updates(train_state.critic_params, critic_update)
             
             metrics = {
-                'critic_loss': loss.item()
+                'critic_loss': loss
             }
             
             new_vars = {
@@ -353,7 +353,7 @@ class DDPG:
             new_actor_params = optax.apply_updates(actor_update, train_state.actor_params)
             
             metrics = {
-                'actor_loss': a_loss.item()
+                'actor_loss': a_loss
             }
             
             new_vars = {
@@ -361,59 +361,70 @@ class DDPG:
                 'actor_opt_state': new_actor_opt_state
             }
             return metrics, new_vars
-    
+        
         def update(train_state: DDPGTrainState,
                    transitions: Transition,
                    step: int):
-            # Keep in mind that the RND reward is using a different encoder--may have to switch that up, but probably don't due to being pretrained
+            
             key1, key2, key3 = jax.random.split(train_state.rng_key, 3)
             
-            if step % self.update_every_steps == 0:
-                return dict()
+            def update_all():
+                '''Actually update everything.'''
+                # critic update
+                critic_metrics, critic_new_vars = update_critic(
+                    train_state,
+                    transitions,
+                    key1,
+                    step
+                )
+                
+                upd_train_state = train_state._replace(
+                    encoder_params=critic_new_vars['encoder_params'],
+                    critic_params=critic_new_vars['critic_params'],
+                    encoder_opt_state=critic_new_vars['encoder_opt_state'],
+                    critic_opt_state=critic_new_vars['critic_opt_state']
+                )
+                
+                # update actor
+                actor_metrics, actor_new_vars = update_actor(
+                    upd_train_state,
+                    transitions,
+                    key2,
+                    step
+                )
+                
+                upd_train_state = upd_train_state._replace(
+                    actor_params=actor_new_vars['actor_params'],
+                    actor_opt_state=actor_new_vars['actor_opt_state']
+                )
+                
+                # update critic target
+                new_target_params = update_target(
+                    upd_train_state.critic_params,
+                    upd_train_state.critic_target_params,
+                    self.ema
+                )
+                
+                new_train_state = upd_train_state._replace(
+                    critic_target_params=new_target_params,
+                    rng_key=key3
+                )
+                
+                # logging
+                metrics = {**critic_metrics, **actor_metrics}
+                return new_train_state, metrics
             
-            # critic update
-            critic_metrics, critic_new_vars = update_critic(
-                train_state,
-                transitions,
-                key1,
-                step
-            )
+            empty_dict = {
+                'critic_loss': jnp.inf,
+                'actor_loss': jnp.inf
+            } # just have to make it so we don't log these
+            curr_state = (train_state, empty_dict)
+            out = jax.lax.cond(step % self.update_every_steps == 0,
+                               lambda _: update_all(),
+                               lambda _: curr_state,
+                               operand=None)
             
-            upd_train_state = train_state._replace(
-                encoder_params=critic_new_vars['encoder_params'],
-                critic_params=critic_new_vars['critic_params'],
-                encoder_opt_state=critic_new_vars['encoder_opt_state'],
-                critic_opt_state=critic_new_vars['critic_opt_state']
-            )
-            
-            # update actor
-            actor_metrics, actor_new_vars = update_actor(
-                upd_train_state,
-                transitions,
-                key2,
-                step
-            )
-            
-            upd_train_state = upd_train_state._replace(
-                actor_params=actor_new_vars['actor_params'],
-                actor_opt_state=actor_new_vars['actor_opt_state']
-            )
-            
-            # update critic target
-            new_target_params = update_target(
-                upd_train_state.critic_params,
-                upd_train_state.critic_target_params,
-                self.ema
-            )
-            
-            new_train_state = upd_train_state._replace(
-                critic_target_params=new_target_params,
-                rng_key=key3
-            )
-            
-            # logging
-            metrics = {**critic_metrics, **actor_metrics}
-            return new_train_state, metrics
+            return out
         
         self._act = act
         self._bc_update = jax.jit(bc_update)

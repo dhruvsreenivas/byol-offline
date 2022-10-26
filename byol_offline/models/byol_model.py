@@ -194,8 +194,7 @@ class WorldModelTrainer:
             new_train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
             return new_train_state, metrics
         
-        def compute_uncertainty(train_state: BYOLTrainState,
-                                obs_seq: jnp.ndarray,
+        def compute_uncertainty(obs_seq: jnp.ndarray,
                                 action_seq: jnp.ndarray,
                                 step: int):
             '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
@@ -206,7 +205,7 @@ class WorldModelTrainer:
             :return uncertainties: Model uncertainties, of shape (seq_len, B).
             '''
             del step
-            _, losses = wm_loss_fn(train_state.wm_params, train_state.target_params, obs_seq, action_seq)
+            _, losses = wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
             # losses are of shape (T, B), result of loss accumulation
             return jax.lax.stop_gradient(losses)
         

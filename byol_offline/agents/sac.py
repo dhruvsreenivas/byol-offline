@@ -144,6 +144,50 @@ class SAC:
         def get_reward_aug(observations: jnp.ndarray, actions: jnp.ndarray):
             return reward_aug_fn(observations, actions)
         
+        # =================== WARMSTARTING ===================
+        
+        @jax.jit
+        def bc_loss(encoder_params: hk.Params,
+                    actor_params: hk.Params,
+                    obs: jnp.ndarray,
+                    actions: jnp.ndarray,
+                    key: jax.random.PRNGKey,
+                    step: int):
+            del step
+
+            features = self.encoder.apply(encoder_params, obs) # no need to expand batch dim
+            dist = self.actor.apply(actor_params, features)
+            
+            sampled_actions = dist.sample(seed=key)
+            loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, exactly like DrQ + BC
+            return loss
+        
+        def bc_update(train_state: SACTrainState, transitions: Transition, step: int):
+            rng, key = jax.random.split(train_state.rng_key)
+            
+            loss_grad_fn = jax.value_and_grad(bc_loss, argnums=(0, 1))
+            loss, (encoder_grads, actor_grads) = loss_grad_fn(train_state.encoder_params, train_state.actor_params, transitions.obs, transitions.actions, key, step)
+            
+            # encoder update
+            enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
+            new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
+            
+            # actor update
+            act_update, new_act_opt_state = self.actor_opt.update(actor_grads, train_state.actor_opt_state)
+            new_actor_params = optax.apply_updates(train_state.actor_params, act_update)
+            
+            new_train_state = train_state._replace(
+                encoder_params=new_enc_params,
+                actor_params=new_actor_params,
+                encoder_opt_state=new_enc_opt_state,
+                actor_opt_state=new_act_opt_state,
+                rng_key=rng
+            )
+            
+            return new_train_state, {'bc_loss': loss}
+        
+        # =================== AGENT LOSS/UPDATE FUNCTIONS ===================
+        
         @jax.jit
         def critic_loss_byol(encoder_params: hk.Params,
                              critic_params: hk.Params,
@@ -467,7 +511,7 @@ class SAC:
             return new_train_state, metrics
 
         self._act = act
-        # TODO add BC warmstarting update function to SAC
+        self._bc_update = jax.jit(bc_update)
         self._update = jax.jit(update)
     
     def save(self, model_path):

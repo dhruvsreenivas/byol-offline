@@ -41,9 +41,9 @@ class Workspace:
         self.pretrained_rnd_dir = Path(to_absolute_path('pretrained_models')) / 'rnd' / self.cfg.task / self.cfg.level / ('actions' if self.cfg.rnd.cat_actions else 'no_actions')
         self.pretrained_rnd_dir.mkdir(parents=True, exist_ok=True)
         
-        # trained policy directory
-        self.policy_dir = Path(to_absolute_path('trained_policies')) / self.cfg.task / self.cfg.level / self.cfg.learner
-        self.policy_dir.mkdir(parents=True, exist_ok=True)
+        # trained agent directory
+        self.agent_dir = Path(to_absolute_path('trained_policies')) / self.cfg.task / self.cfg.level / self.cfg.learner
+        self.agent_dir.mkdir(parents=True, exist_ok=True)
         
         if self.cfg.task in MUJOCO_ENVS:
             self.train_env = make_gym_env(self.cfg.task)
@@ -72,13 +72,13 @@ class Workspace:
         
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
-        if self.cfg.load_model:
+        if self.cfg.load_model and self.cfg.reward_aug == 'rnd':
             model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl'
             self.rnd_trainer.load(model_path)
 
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
-        if self.cfg.load_model:
+        if self.cfg.load_model and self.cfg.reward_aug == 'byol':
             model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl'
             self.byol_trainer.load(model_path)
             
@@ -140,11 +140,10 @@ class Workspace:
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, obs.shape[1]) # want to log per batch
                 
+            log_dump = {k: v.value() for k, v in epoch_metrics.items()}
             if self.cfg.wandb:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
             else:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 print_dict(log_dump)
             
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
@@ -163,11 +162,10 @@ class Workspace:
                 for k, v in batch_metrics.items():
                     epoch_metrics[k].update(v, obs.shape[0])
             
+            log_dump = {k: v.value() for k, v in epoch_metrics.items()}
             if self.cfg.wandb:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
             else:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 print_dict(log_dump)
             
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
@@ -252,29 +250,56 @@ class Workspace:
         eval_every = Every(self.cfg.policy_eval_every)
         save_every = Every(self.cfg.model_save_every)
         
+        if self.cfg.bc_warmstart:
+            print('====== STARTING BC WARMSTART ... ======')
+            for epoch in trange(1, self.cfg.bc_epochs + 1):
+                epoch_metrics = defaultdict(AverageMeter)
+                for batch in self.agent_dataloader:
+                    transitions = Transition(*batch)
+                    new_train_state, bc_metrics = self.agent._bc_update(self.agent.train_state, transitions, self.global_step)
+                    self.agent.train_state = new_train_state
+                    
+                    batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
+                    for k, v in bc_metrics.items():
+                        epoch_metrics[k].update(v, batch_size)
+                        
+                    self.global_step += 1
+                
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                if self.cfg.wandb:
+                    wandb.log(log_dump)
+                else:
+                    print_dict(log_dump)
+                    
+            print('====== ENDING BC WARMSTART ... STARTING AGENT TRAINING ... ======')
+        
+        # reset global step for agent training (TODO do we need to do this?)
+        self.global_step = 0
+        
         for epoch in trange(1, self.cfg.policy_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.agent_dataloader:
                 transitions = Transition(*batch)
+                
                 new_train_state, batch_metrics = self.agent._update(self.agent.train_state, transitions, self.global_step)
                 self.agent.train_state = new_train_state
                 
                 batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
                 for k, v in batch_metrics.items():
-                    epoch_metrics[k].update(v, batch_size)
-                
+                    if v < jnp.inf:
+                        epoch_metrics[k].update(v, batch_size)
+                    
                 self.global_step += 1
-                
+            
+            log_dump = {k: v.value() for k, v in epoch_metrics.items()}
             if self.cfg.wandb:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 wandb.log(log_dump)
             else:
-                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
                 print_dict(log_dump)
             
             # save when necessary
             if self.cfg.save_model and save_every(epoch) == 0:
-                model_path = self.policy_dir / f'policy_{epoch}.pkl'
+                model_path = self.agent_dir / f'agent_{epoch}.pkl'
                 self.agent.save(model_path)
 
             # eval when necessary (in the beginning as well)
@@ -304,7 +329,7 @@ class Workspace:
                     print_dict(log_dump)
                     
     def train_one_datapoint(self):
-        '''Train on one datapoint to make sure optimization goes down.'''
+        '''Train on one datapoint to make sure loss goes down.'''
         self.rng, subkey = jax.random.split(self.rng)
         rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + tuple(self.cfg.obs_shape), dtype=jnp.float32)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
