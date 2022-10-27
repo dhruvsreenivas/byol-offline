@@ -93,7 +93,7 @@ class Workspace:
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size)
+            self.rnd_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
@@ -112,7 +112,7 @@ class Workspace:
                 self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                self.agent_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size)
+                self.agent_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs)
         
         # RL agent
         if self.cfg.learner == 'ddpg':
@@ -120,8 +120,9 @@ class Workspace:
         else:
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
             
-        # simple modeling for sanity checking
+        # sanity checking (BC + simple dynamics model)
         self.simple_dynamics_trainer = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
+        self.bc = BC(self.cfg.bc)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
@@ -172,7 +173,33 @@ class Workspace:
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
                 
-    # ==================== TRAINING AGENT ====================
+    # ==================== AGENT TRAINING ====================
+    
+    def train_bc(self):
+        eval_every = Every(self.cfg.policy_eval_every)
+        
+        for epoch in trange(1, self.cfg.policy_train_epochs + 1):
+            epoch_metrics = defaultdict(AverageMeter)
+            for batch in self.agent_dataloader:
+                transitions = Transition(*batch)
+                
+                new_train_state, batch_metrics = self.bc._update(self.bc.train_state, transitions, self.global_step)
+                self.bc.train_state = new_train_state
+                
+                batch_size = transitions.obs.shape[1] if self.cfg.train_byol else transitions.obs.shape[0]
+                for k, v in batch_metrics.items():
+                    epoch_metrics[k].update(v, batch_size)
+            
+            log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+            if self.cfg.wandb:
+                wandb.log(log_dump)
+            else:
+                print_dict(log_dump)
+
+            # eval when necessary (in the beginning as well)
+            if epoch == 1 or eval_every(epoch):
+                # TODO write eval
+                pass
                 
     def eval_agent_mujoco(self):
         '''Evaluates agent in MuJoCo envs.'''

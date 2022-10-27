@@ -109,6 +109,12 @@ simple_dynamics:
   train_for_diff: true
   transform: ${transform}
 
+bc:
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  seed: ${seed}
+  hidden_dim: ${hidden_dim}
+  lr: 1e-4
 
 hydra:
   run:

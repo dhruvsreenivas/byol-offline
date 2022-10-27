@@ -10,6 +10,7 @@ from pathlib import Path
 
 from byol_offline.models import *
 from memory.replay_buffer import *
+from utils import get_gym_dataset, make_gym_env
 
 '''Various testing to make sure core machinery works.'''
 
@@ -116,6 +117,53 @@ def test_iterative_dataloading():
                 assert not eq, f"matched at count {count} -- if 0 this is not good haha"
             
             count += 1
-        
+
+@hydra.main(config_path='cfgs', config_name='config')
+def test_bonus(cfg, byol=False):
+    '''Test that bonus on non-medium dataset is lower than bonus on expert or random dataset.'''
+    env = make_gym_env(cfg.task)
+    cfg.obs_shape = env.observation_space.shape
+    cfg.action_shape = env.action_space.shape
+    
+    if byol:
+        trainer = WorldModelTrainer(cfg.byol)
+    else:
+        trainer = RNDModelTrainer(cfg.rnd)
+    
+    action_dir = 'actions' if cfg.rnd.cat_actions else 'no_actions'
+    model_path = f'/home/ds844/byol-offline/pretrained_models/{"byol" if byol else "rnd"}/hopper/medium/{action_dir}/{"byol" if byol else "rnd"}_1000.pkl'
+    trainer.load(model_path)
+    
+    # grabbing data
+    random_dataset = get_gym_dataset(cfg.task, 'random')
+    medium_dataset = get_gym_dataset(cfg.task, 'medium')
+    expert_dataset = get_gym_dataset(cfg.task, 'expert')
+    
+    random_obs = random_dataset['observations']
+    random_actions = random_dataset['actions']
+    medium_obs = medium_dataset['observations']
+    medium_actions = medium_dataset['actions']
+    expert_obs = expert_dataset['observations']
+    expert_actions = expert_dataset['actions']
+    
+    # normalize everything
+    random_stats = get_mujoco_dataset_transformations(random_dataset)
+    medium_stats = get_mujoco_dataset_transformations(medium_dataset)
+    expert_stats = get_mujoco_dataset_transformations(expert_dataset)
+    
+    random_obs, random_actions = normalize_sa(random_obs, random_actions, random_stats)
+    medium_obs, medium_actions = normalize_sa(medium_obs, medium_actions, medium_stats)
+    expert_obs, expert_actions = normalize_sa(expert_obs, expert_actions, expert_stats)
+    
+    # uncertainties
+    random_uncertainties = trainer._compute_uncertainty(random_obs, random_actions, 0)
+    medium_uncertainties = trainer._compute_uncertainty(medium_obs, medium_actions, 0)
+    expert_uncertainties = trainer._compute_uncertainty(expert_obs, expert_actions, 0)
+    print(f'shapes: \n random: {random_uncertainties.shape} \n medium: {medium_uncertainties.shape} \n expert: {expert_uncertainties.shape}')
+    
+    print(f'stats for random {"byol" if byol else "rnd"} model: {np.mean(random_uncertainties)}, {np.std(random_uncertainties)}')
+    print(f'stats for medium {"byol" if byol else "rnd"} model: {np.mean(medium_uncertainties)}, {np.std(medium_uncertainties)}')
+    print(f'stats for expert {"byol" if byol else "rnd"} model: {np.mean(expert_uncertainties)}, {np.std(expert_uncertainties)}')
+    
 if __name__ == '__main__':
-    test_iterative_dataloading()
+    test_bonus()

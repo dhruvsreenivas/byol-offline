@@ -116,3 +116,22 @@ class SACCritic(hk.Module):
         q2 = self.q2(obs_action)
         
         return q1, q2
+    
+class BCActor(hk.Module):
+    '''Behavioral cloning network.'''
+    def __init__(self, hidden_dim, action_dim):
+        super().__init__()
+        self._hidden_dim = hidden_dim
+        self._action_dim = action_dim
+        
+    def __call__(self, obs):
+        net = hk.nets.MLP(
+            [self._hidden_dim, self._hidden_dim, 2 * self._action_dim],
+            activation=jax.nn.relu
+        )
+        out = net(obs)
+        mean, log_std = jnp.split(out, 2, -1)
+        std = jnp.exp(log_std)
+        
+        dist = distrax.Normal(mean, std)
+        return dist

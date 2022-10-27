@@ -40,6 +40,12 @@ def get_mujoco_dataset_transformations(dataset):
 
     return state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale
 
+def normalize_sa(states, actions, stats):
+    state_mean, action_mean, _, state_scale, action_scale, _ = stats
+    states = (states - state_mean) / state_scale
+    actions = (actions - action_mean) / action_scale
+    return states, actions
+
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
     def __init__(self, data_dir, seq_len):
@@ -303,13 +309,28 @@ def d4rl_dict_to_tuple(dict_batch):
         batch.append(tf.cast(v, dtype=tf.float32))
     return tuple(batch)
 
-def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, prefetch=True):
+def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, normalize=True, prefetch=True):
     dataset = get_gym_dataset(dataset_name, dataset_capability)
     n_examples = get_dataset_size(dataset)
+    
+    if normalize:
+        stats = get_mujoco_dataset_transformations(dataset)
     
     dataset = tf.data.Dataset.from_tensor_slices(dataset)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.map(d4rl_dict_to_tuple)
+    
+    if normalize:
+        def normalize_map(state, action, reward, next_state, done):
+            state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale = stats
+            
+            normalized_state = (state - state_mean) / state_scale
+            normalized_action = (action - action_mean) / action_scale
+            normalized_next_state = (next_state - next_state_mean) / next_state_scale
+            
+            return normalized_state, normalized_action, reward, normalized_next_state, done
+        dataset = dataset.map(normalize_map)
+    
     dataset = dataset.shuffle(buffer_size=n_examples, seed=0, reshuffle_each_iteration=True) # perfect shuffling
     
     if prefetch:
