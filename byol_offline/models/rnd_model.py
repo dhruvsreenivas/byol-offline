@@ -4,7 +4,6 @@ import haiku as hk
 import optax
 import dill
 from typing import NamedTuple
-import functools
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
