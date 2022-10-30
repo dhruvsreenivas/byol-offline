@@ -254,7 +254,6 @@ def byol_sampling_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceRe
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
-
     
     generator = lambda: generator_fn(buffer, max_steps)
     output_sig = (

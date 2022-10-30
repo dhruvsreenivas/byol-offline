@@ -76,14 +76,15 @@ class TD3:
         reward_lambda = cfg.reward_lambda
         max_action = cfg.max_action
         ema = cfg.ema
-        policy_noise = cfg.policy_noise
-        noise_clip = cfg.noise_clip
+        policy_noise = cfg.policy_noise * max_action
+        noise_clip = cfg.noise_clip * max_action
         policy_update_freq = cfg.policy_update_freq
         
         # ================== START OF ALL FNS ==================
         
-        def act(obs: jnp.ndarray, step: int):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool=False):
             del step
+            del eval_mode
             
             actor_params = self.train_state.actor_params
             return actor.apply(actor_params, obs)
@@ -232,7 +233,10 @@ class TD3:
                 return upd_train_state, actor_metrics
             
             def stay_the_same(train_state):
-                return train_state, dict()
+                empty_dict = {
+                    'actor_loss': jnp.inf
+                }
+                return train_state, empty_dict
 
             upd_train_state, actor_metrics = jax.lax.cond(
                 step % policy_update_freq == 0,

@@ -51,6 +51,7 @@ class Workspace:
             
             self.cfg.obs_shape = self.train_env.observation_space.shape
             self.cfg.action_shape = self.train_env.action_space.shape
+            self.cfg.max_action = float(self.train_env.action_space.high[0])
         else:
             self.train_env = dmc.make(
                 self.cfg.task,
@@ -89,6 +90,15 @@ class Workspace:
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs)
+                self.dataset_stats = (
+                    rnd_buffer.state_mean,
+                    rnd_buffer.action_mean,
+                    rnd_buffer.next_state_mean,
+                    rnd_buffer.state_scale,
+                    rnd_buffer.action_scale,
+                    rnd_buffer.next_state_scale
+                )
+            
             self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
@@ -101,6 +111,8 @@ class Workspace:
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs)
+            # already got stats by this point so we're good
+            
         self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         # TODO make BYOL dataloader iterative if needed
 
@@ -214,6 +226,10 @@ class Workspace:
             done = False
             episode_reward = 0.0
             while not done:
+                # normalize if needed
+                if self.cfg.normalize_inputs:
+                    ob = (ob - self.state_mean) / self.state_scale
+                
                 action = self.agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
 

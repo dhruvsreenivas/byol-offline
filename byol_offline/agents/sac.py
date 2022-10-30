@@ -120,7 +120,7 @@ class SAC:
         
         # =================== START OF ALL FNS ===================
         
-        def act(obs, step, eval_mode=False):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool=False):
             del step
             
             rng, key = jax.random.split(self.train_state.rng_key)

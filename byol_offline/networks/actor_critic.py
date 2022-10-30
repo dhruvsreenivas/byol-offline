@@ -68,6 +68,7 @@ class DDPGCritic(hk.Module):
         return q1, q2
 
 # ============================== TD3 ==============================
+
 class TD3Actor(hk.Module):
     '''TD3 actor for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
     def __init__(self, hidden_dim, action_shape, max_action):
@@ -164,7 +165,9 @@ class SACCritic(hk.Module):
         q2 = self.q2(obs_action)
         
         return q1, q2
-    
+
+# ============================== BC ==============================
+
 class BCActor(hk.Module):
     '''Behavioral cloning network.'''
     def __init__(self, hidden_dim, action_shape):

@@ -21,7 +21,7 @@ model_batch_size: 50
 seq_len: 50
 max_steps: 1000000 # to be on par with D4RL
 
-# world model args
+# general args (world model + policies + everything else)
 feature_dim: 200
 hidden_dim: 128
 
@@ -44,7 +44,7 @@ bc_epochs: 100
 
 # policy training args
 policy_train_epochs: 1000
-policy_rb_capacity: 10000
+policy_rb_capacity: 1000000
 policy_batch_size: 50
 
 # policy evaluation args
