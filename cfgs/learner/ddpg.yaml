@@ -7,10 +7,10 @@ critic_lr: 1e-4
 
 # hyperparameters
 discount: 0.99
-reward_lambda: 0.5
+reward_lambda: 1000
 ema: 0.01
 init_std: 1.0
 final_std: 0.1
 std_duration: 500000
 std_clip_val: 0.3
-update_every_steps: 2
+update_every_steps: 1 # TODO maybe reset to 2

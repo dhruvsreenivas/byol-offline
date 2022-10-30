@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import haiku as hk
 import optax
 from typing import NamedTuple
-import functools
 import dill
 
 from memory.replay_buffer import Transition
@@ -39,14 +38,14 @@ class SimpleDynamicsTrainer:
         else:
             raise NotImplementedError("haven't implemented more complicated models yet. Starting simple :)")
 
-        self.model = hk.without_apply_rng(hk.transform(model_fn))
+        model = hk.without_apply_rng(hk.transform(model_fn))
         
         # initialization
         key = jax.random.PRNGKey(cfg.seed)
-        params = self.model.init(key, jnp.zeros((1,) + tuple(cfg.obs_shape)), jnp.zeros((1,) + tuple(cfg.action_shape)))
+        params = model.init(key, jnp.zeros((1,) + tuple(cfg.obs_shape)), jnp.zeros((1,) + tuple(cfg.action_shape)))
         
-        self.opt = optax.sgd(cfg.lr, momentum=0.9, nesterov=True) if cfg.optim == 'sgd' else optax.adam(cfg.lr)
-        opt_state = self.opt.init(params)
+        opt = optax.sgd(cfg.lr, momentum=0.9, nesterov=True) if cfg.optim == 'sgd' else optax.adam(cfg.lr)
+        opt_state = opt.init(params)
         
         self.train_state = SimpleTrainState(
             params=params,
@@ -58,8 +57,15 @@ class SimpleDynamicsTrainer:
         @jax.jit
         def loss_fn(params: hk.Params,
                     transitions: Transition):
-            outputs = self.model.apply(params, transitions.obs, transitions.actions)
-            targets = jnp.where(self.train_for_diff, transitions.next_obs - transitions.obs, transitions.next_obs)
+            outputs = model.apply(params, transitions.obs, transitions.actions)
+            
+            def state_diff():
+                return transitions.next_obs - transitions.obs
+            
+            targets = jax.lax.cond(self.train_for_diff,
+                                   lambda _: state_diff(),
+                                   lambda _: transitions.next_obs,
+                                   operand=None)
             
             loss = jnp.mean(jnp.square(outputs - targets))
             return loss
@@ -76,8 +82,8 @@ class SimpleDynamicsTrainer:
                 'dynamics_loss': loss
             }
             
-            update, new_opt_state = self.opt.update(grads, self.train_state.opt_state)
-            new_params = optax.apply_updates(self.train_state.params, update)
+            update, new_opt_state = opt.update(grads, train_state.opt_state)
+            new_params = optax.apply_updates(train_state.params, update)
             
             new_train_state = SimpleTrainState(
                 params=new_params,

@@ -117,12 +117,14 @@ class Workspace:
         # RL agent
         if self.cfg.learner == 'ddpg':
             self.agent = DDPG(self.cfg, self.byol_trainer, self.rnd_trainer)
-        else:
+        elif self.cfg.learner == 'sac':
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
+        else:
+            self.agent = TD3(self.cfg, self.byol_trainer, self.rnd_trainer)
             
         # sanity checking (BC + simple dynamics model)
         self.simple_dynamics_trainer = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
-        self.bc = BC(self.cfg.bc)
+        self.bc = BC(self.cfg)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)

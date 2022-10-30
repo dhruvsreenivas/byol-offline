@@ -165,5 +165,20 @@ def test_bonus(cfg, byol=False):
     print(f'stats for medium {"byol" if byol else "rnd"} model: {np.mean(medium_uncertainties)}, {np.std(medium_uncertainties)}')
     print(f'stats for expert {"byol" if byol else "rnd"} model: {np.mean(expert_uncertainties)}, {np.std(expert_uncertainties)}')
     
+@hydra.main(config_path='cfgs', config_name='config')
+def test_reward(cfg):
+    '''Checking average reward in datasets.'''
+    random_dataset = get_gym_dataset(cfg.task, 'random')
+    medium_dataset = get_gym_dataset(cfg.task, 'medium')
+    expert_dataset = get_gym_dataset(cfg.task, 'expert')
+    
+    random_rewards = random_dataset['rewards']
+    medium_rewards = medium_dataset['rewards']
+    expert_rewards = expert_dataset['rewards']
+    
+    print(f'stats for random dataset: {np.mean(random_rewards)}, {np.std(random_rewards)}')
+    print(f'stats for medium dataset: {np.mean(medium_rewards)}, {np.std(medium_rewards)}')
+    print(f'stats for expert dataset: {np.mean(expert_rewards)}, {np.std(expert_rewards)}')
+    
 if __name__ == '__main__':
     test_bonus()

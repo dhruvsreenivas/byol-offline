@@ -4,7 +4,6 @@ import haiku as hk
 import optax
 import dill
 from typing import Tuple, NamedTuple
-import functools
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.rnn import *
@@ -91,25 +90,29 @@ class MLPLatentWorldModel(hk.Module):
 class WorldModelTrainer:
     '''World model trainer.'''
     def __init__(self, cfg):
-        self.cfg = cfg
-        
+        # set up
         if cfg.task in MUJOCO_ENVS:
             wm_fn = lambda o, a: MLPLatentWorldModel(cfg.d4rl)(o, a)
         else:
             wm_fn = lambda o, a: ConvLatentWorldModel(cfg.vd4rl)(o, a)
         
-        self.wm = hk.without_apply_rng(hk.transform(wm_fn))
+        wm = hk.without_apply_rng(hk.transform(wm_fn))
         
         # params
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
-        wm_params = self.wm.init(k1, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
-        target_params = self.wm.init(k2, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
+        wm_params = wm.init(k1, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
+        target_params = wm.init(k2, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
         
         # optimizer
-        self.wm_opt = optax.adam(cfg.lr)
-        wm_opt_state = self.wm_opt.init(wm_params)
+        if cfg.optim == 'adam':
+            wm_opt = optax.adam(cfg.lr)
+        elif cfg.optim == 'adamw':
+            wm_opt = optax.adamw(cfg.lr)
+        else:
+            wm_opt = optax.sgd(cfg.lr, momentum=0.9)
+        wm_opt_state = wm_opt.init(wm_params)
         
         self.train_state = BYOLTrainState(
             wm_params=wm_params,
@@ -134,10 +137,10 @@ class WorldModelTrainer:
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
             
-            pred_latents, _ = self.wm.apply(wm_params, obs_window, action_window)
+            pred_latents, _ = wm.apply(wm_params, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            _, target_latents = self.wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
+            _, target_latents = wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
 
             # normalize latents
@@ -178,7 +181,11 @@ class WorldModelTrainer:
             loss_grad_fn = jax.value_and_grad(wm_loss_fn, has_aux=True)
             (loss, _), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions)
             
-            update, new_opt_state = self.wm_opt.update(grads, train_state.wm_opt_state)
+            if cfg.pmap:
+                loss = jax.tree_util.tree_map(lambda l: jax.lax.pmean(l, axis_name='i'), loss)
+                grads = jax.tree_util.tree_map(lambda g: jax.lax.pmean(g, axis_name='i'), grads)
+            
+            update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
             
             new_target_params = target_update_fn(new_params, train_state.target_params, self.ema)
@@ -209,7 +216,7 @@ class WorldModelTrainer:
         
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         if cfg.pmap:
-            self._update = functools.partial(jax.pmap, static_broadcasted_argnums=(0, 1))(self._update)
+            self._update = jax.pmap(self._update, axis_name='i')
         
         self._compute_uncertainty = jax.jit(compute_uncertainty)
     
@@ -223,5 +230,5 @@ class WorldModelTrainer:
                 train_state = dill.load(f)
                 self.train_state = train_state
         except FileNotFoundError:
-            print('cannot load BYOL-Explore model')
+            print('cannot load BYOL-Offline model')
             exit()

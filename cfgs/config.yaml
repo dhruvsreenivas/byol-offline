@@ -19,7 +19,7 @@ action_shape: ???
 model_train_epochs: 1000
 model_batch_size: 50
 seq_len: 50
-max_steps: 100000
+max_steps: 1000000 # to be on par with D4RL
 
 # world model args
 feature_dim: 200
@@ -62,6 +62,7 @@ byol:
   seed: ${seed}
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
+  optim: adam
   lr: 1e-3
   ema: 0.99
   pmap: false
@@ -85,6 +86,7 @@ rnd:
   seed: ${seed}
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
+  optim: adam
   lr: 1e-3
   cat_actions: false
 
@@ -114,6 +116,7 @@ bc:
   action_shape: ${action_shape}
   seed: ${seed}
   hidden_dim: ${hidden_dim}
+  optim: adam
   lr: 1e-4
 
 hydra:

@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import haiku as hk
 from byol_offline.networks.network_utils import *
 
+# ============================== DDPG ==============================
+
 class DDPGActor(hk.Module):
     def __init__(self, action_shape, feature_dim, hidden_dim):
         super().__init__()
@@ -64,6 +66,52 @@ class DDPGCritic(hk.Module):
         q2 = self.q2(h_a)
         
         return q1, q2
+
+# ============================== TD3 ==============================
+class TD3Actor(hk.Module):
+    '''TD3 actor for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
+    def __init__(self, hidden_dim, action_shape, max_action):
+        super().__init__()
+        self._hidden_dim = hidden_dim
+        self._action_dim = action_shape[0]
+        self._max_action = max_action
+    
+    def __call__(self, obs):
+        x = hk.Linear(self._hidden_dim)(obs)
+        x = jax.nn.relu(x)
+        x = hk.Linear(self._hidden_dim)(x)
+        x = jax.nn.relu(x)
+        x = hk.Linear(self._action_dim)(x)
+        
+        x = jnp.tanh(x)
+        return x * self._max_action
+    
+class TD3Critic(hk.Module):
+    '''TD3 critic for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self._hidden_dim = hidden_dim
+        
+    def __call__(self, obs, action):
+        sa = jnp.concatenate([obs, action], axis=-1)
+        
+        # first critic
+        q1 = hk.Linear(self._hidden_dim)(sa)
+        q1 = jax.nn.relu(q1)
+        q1 = hk.Linear(self._hidden_dim)(q1)
+        q1 = jax.nn.relu(q1)
+        q1 = hk.Linear(1)(q1)
+        
+        # second critic
+        q2 = hk.Linear(self._hidden_dim)(sa)
+        q2 = jax.nn.relu(q2)
+        q2 = hk.Linear(self._hidden_dim)(q2)
+        q2 = jax.nn.relu(q2)
+        q2 = hk.Linear(1)(q2)
+        
+        return q1, q2
+    
+# ============================== SAC ==============================
     
 # TODO: do we keep these hardcoded for DMC?
 MIN_LOG_STD = -5
@@ -119,14 +167,14 @@ class SACCritic(hk.Module):
     
 class BCActor(hk.Module):
     '''Behavioral cloning network.'''
-    def __init__(self, hidden_dim, action_dim):
+    def __init__(self, hidden_dim, action_shape):
         super().__init__()
         self._hidden_dim = hidden_dim
-        self._action_dim = action_dim
+        self._action_shape = action_shape
         
     def __call__(self, obs):
         net = hk.nets.MLP(
-            [self._hidden_dim, self._hidden_dim, 2 * self._action_dim],
+            [self._hidden_dim, self._hidden_dim, 2 * self._action_shape[0]],
             activation=jax.nn.relu
         )
         out = net(obs)

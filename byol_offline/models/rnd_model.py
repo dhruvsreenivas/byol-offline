@@ -64,8 +64,6 @@ class MLPRNDModelWithActions(MLPRNDModel):
 class RNDModelTrainer:
     '''RND model trainer.'''
     def __init__(self, cfg):
-        self.cfg = cfg
-        
         # initialize here before defining all loss/update fns
         if cfg.task in MUJOCO_ENVS:
             if cfg.cat_actions:
@@ -78,22 +76,27 @@ class RNDModelTrainer:
             else:
                 rnd_fn = lambda o: ConvRNDModel(cfg.vd4rl)(o)
         
-        self.rnd = hk.without_apply_rng(hk.transform(rnd_fn))
+        rnd = hk.without_apply_rng(hk.transform(rnd_fn))
         
         # params
         key = jax.random.PRNGKey(cfg.seed)
         k1, k2 = jax.random.split(key)
         
         if cfg.cat_actions:
-            rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
-            target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
+            rnd_params = rnd.init(k1, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
+            target_params = rnd.init(k2, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
         else:
-            rnd_params = self.rnd.init(k1, batched_zeros_like(cfg.obs_shape))
-            target_params = self.rnd.init(k2, batched_zeros_like(cfg.obs_shape))
+            rnd_params = rnd.init(k1, batched_zeros_like(cfg.obs_shape))
+            target_params = rnd.init(k2, batched_zeros_like(cfg.obs_shape))
         
         # optimizer
-        self.rnd_opt = optax.adam(cfg.lr)
-        rnd_opt_state = self.rnd_opt.init(rnd_params)
+        if cfg.optim == 'adam':
+            rnd_opt = optax.adam(cfg.lr)
+        elif cfg.optim == 'adamw':
+            rnd_opt = optax.adamw(cfg.lr)
+        else:
+            rnd_opt = optax.sgd(cfg.lr, momentum=0.9)
+        rnd_opt_state = rnd_opt.init(rnd_params)
         
         self.train_state = RNDTrainState(
             params=rnd_params,
@@ -103,16 +106,16 @@ class RNDModelTrainer:
     
         @jax.jit
         def rnd_loss_fn(params, target_params, obs):
-            output = self.rnd.apply(params, obs)
-            target_output = self.rnd.apply(target_params, obs)
+            output = rnd.apply(params, obs)
+            target_output = rnd.apply(target_params, obs)
             
             # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
             return jnp.mean(jnp.square(target_output - output))
         
         @jax.jit
         def rnd_loss_fn_actions(params, target_params, obs, actions):
-            output = self.rnd.apply(params, obs, actions)
-            target_output = self.rnd.apply(target_params, obs, actions)
+            output = rnd.apply(params, obs, actions)
+            target_output = rnd.apply(target_params, obs, actions)
             
             return jnp.mean(jnp.square(target_output - output))
     
@@ -126,8 +129,8 @@ class RNDModelTrainer:
                 loss_grad_fn = jax.value_and_grad(rnd_loss_fn)
                 loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs)
             
-            update, new_opt_state = self.rnd_opt.update(grads, train_state.opt_state)
-            new_params = optax.apply_updates(self.train_state.params, update)
+            update, new_opt_state = rnd_opt.update(grads, train_state.opt_state)
+            new_params = optax.apply_updates(train_state.params, update)
             
             metrics = {
                 'rnd_loss': loss
@@ -146,11 +149,11 @@ class RNDModelTrainer:
             del step
             
             if cfg.cat_actions:
-                online_output = self.rnd.apply(self.train_state.params, obs, actions)
-                target_output = self.rnd.apply(self.train_state.target_params, obs, actions)
+                online_output = rnd.apply(self.train_state.params, obs, actions)
+                target_output = rnd.apply(self.train_state.target_params, obs, actions)
             else:
-                online_output = self.rnd.apply(self.train_state.params, obs)
-                target_output = self.rnd.apply(self.train_state.target_params, obs)
+                online_output = rnd.apply(self.train_state.params, obs)
+                target_output = rnd.apply(self.train_state.target_params, obs)
             
             squared_diff = jnp.square(target_output - online_output).sum(-1)
             return jax.lax.stop_gradient(squared_diff)

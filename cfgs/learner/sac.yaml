@@ -8,8 +8,6 @@ alpha_lr: 5e-4
 
 # hyperparameters
 discount: 0.99
-reward_lambda: 0.5
+reward_lambda: 1000
 ema: 0.01
-actor_update_freq: 1
 target_update_freq: 2
-target_entropy: ???

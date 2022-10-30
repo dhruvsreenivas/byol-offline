@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import haiku as hk
 import optax
 from typing import NamedTuple
@@ -30,7 +31,7 @@ class SACTrainState(NamedTuple):
 class SAC:
     '''SACv2 agent from Denis Yarats' PyTorch SAC repo.'''
     def __init__(self, cfg, byol=None, rnd=None):
-        self.cfg = cfg
+        # SET UP
         
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
         if cfg.task not in MUJOCO_ENVS:
@@ -43,14 +44,14 @@ class SAC:
                 [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
                 activation=jax.nn.swish
             )(obs)
-        self.encoder = hk.without_apply_rng(hk.transform(encoder_fn))
+        encoder = hk.without_apply_rng(hk.transform(encoder_fn))
         
         # actor + critic
         actor_fn = lambda obs, std: SACActor(cfg.action_shape, cfg.hidden_dim)(obs, std)
-        self.actor = hk.without_apply_rng(hk.transform(actor_fn))
+        actor = hk.without_apply_rng(hk.transform(actor_fn))
         
         critic_fn = lambda obs, action: SACCritic(cfg.hidden_dim)(obs, action)
-        self.critic = hk.without_apply_rng(hk.transform(critic_fn))
+        critic = hk.without_apply_rng(hk.transform(critic_fn))
 
         # reward pessimism (currently using different encoder than the DrQv2 stuff--maybe have to change)
         if cfg.reward_aug == 'rnd':
@@ -70,33 +71,33 @@ class SAC:
         rng = jax.random.PRNGKey(cfg.seed)
         key1, key2, key3, key4 = jax.random.split(rng, 4)
         
-        encoder_params = self.encoder.init(key1, batched_zeros_like(cfg.obs_shape))
+        encoder_params = encoder.init(key1, batched_zeros_like(cfg.obs_shape))
         
         if cfg.task not in MUJOCO_ENVS:
             if byol is None or cfg.reward_aug == 'rnd':
-                actor_params = self.actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
+                actor_params = actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
+                critic_params = critic_target_params = critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
             else:
-                actor_params = self.actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
-                critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
+                actor_params = actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
+                critic_params = critic_target_params = critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
         else:
-            actor_params = self.actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
-            critic_params = critic_target_params = self.critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
+            actor_params = actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
+            critic_params = critic_target_params = critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
         
         log_alpha = jnp.asarray(0., dtype=jnp.float32)
         
         # optimizers
-        self.encoder_opt = optax.adam(cfg.encoder_lr)
-        encoder_opt_state = self.encoder_opt.init(encoder_params)
+        encoder_opt = optax.adam(cfg.encoder_lr)
+        encoder_opt_state = encoder_opt.init(encoder_params)
         
-        self.actor_opt = optax.adam(cfg.actor_lr)
-        actor_opt_state = self.actor_opt.init(actor_params)
+        actor_opt = optax.adam(cfg.actor_lr)
+        actor_opt_state = actor_opt.init(actor_params)
         
-        self.critic_opt = optax.adam(cfg.critic_lr)
-        critic_opt_state = self.critic_opt.init(critic_params)
+        critic_opt = optax.adam(cfg.critic_lr)
+        critic_opt_state = critic_opt.init(critic_params)
         
-        self.log_alpha_opt = optax.adam(cfg.alpha_lr)
-        log_alpha_opt_state = self.critic_opt.init(log_alpha)
+        log_alpha_opt = optax.adam(cfg.alpha_lr)
+        log_alpha_opt_state = critic_opt.init(log_alpha)
         
         # train state
         self.train_state = SACTrainState(
@@ -112,11 +113,10 @@ class SAC:
             rng_key=key4
         )
         
-        self.reward_lambda = cfg.reward_lambda
+        reward_lambda = cfg.reward_lambda
         self.ema = cfg.ema
-        self.actor_update_freq = cfg.actor_update_freq
-        self.target_update_frequency = cfg.target_update_frequency
-        self.target_entropy = cfg.target_entropy # TODO: define for SAC
+        target_update_frequency = cfg.target_update_frequency
+        target_entropy = -np.prod(cfg.action_shape)
         
         # =================== START OF ALL FNS ===================
         
@@ -126,10 +126,10 @@ class SAC:
             rng, key = jax.random.split(self.train_state.rng_key)
             
             encoder_params = self.train_state.encoder_params
-            features = self.encoder.apply(encoder_params, obs) # don't need batch dim here
+            features = encoder.apply(encoder_params, obs) # don't need batch dim here
 
             actor_params = self.train_state.actor_params
-            dist = self.actor.apply(actor_params, features)
+            dist = actor.apply(actor_params, features)
             
             mean = dist.mean()
             sample = dist.sample(seed=key)
@@ -140,7 +140,7 @@ class SAC:
             ) # no need to return, as this is not jitted
             
             return action
-        
+
         def get_reward_aug(observations: jnp.ndarray, actions: jnp.ndarray):
             return reward_aug_fn(observations, actions)
         
@@ -155,8 +155,8 @@ class SAC:
                     step: int):
             del step
 
-            features = self.encoder.apply(encoder_params, obs) # no need to expand batch dim
-            dist = self.actor.apply(actor_params, features)
+            features = encoder.apply(encoder_params, obs) # no need to expand batch dim
+            dist = actor.apply(actor_params, features)
             
             sampled_actions = dist.sample(seed=key)
             loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, exactly like DrQ + BC
@@ -169,11 +169,11 @@ class SAC:
             loss, (encoder_grads, actor_grads) = loss_grad_fn(train_state.encoder_params, train_state.actor_params, transitions.obs, transitions.actions, key, step)
             
             # encoder update
-            enc_update, new_enc_opt_state = self.encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
+            enc_update, new_enc_opt_state = encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
             new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
             
             # actor update
-            act_update, new_act_opt_state = self.actor_opt.update(actor_grads, train_state.actor_opt_state)
+            act_update, new_act_opt_state = actor_opt.update(actor_grads, train_state.actor_opt_state)
             new_actor_params = optax.apply_updates(train_state.actor_params, act_update)
             
             new_train_state = train_state._replace(
@@ -201,26 +201,26 @@ class SAC:
             
             # get reward aug
             reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
+            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
 
             # flatten transitions (BYOL loss is sequential)
             transitions = flatten_data(transitions)
             
             # encode observations
-            features = self.encoder.apply(encoder_params, transitions.obs)
-            next_features = self.encoder.apply(encoder_params, transitions.next_obs)
+            features = encoder.apply(encoder_params, transitions.obs)
+            next_features = encoder.apply(encoder_params, transitions.next_obs)
             
             # get the targets
-            dist = self.actor.apply(actor_params, next_features)
+            dist = actor.apply(actor_params, next_features)
             next_actions = dist.sample(seed=key)
             log_probs = dist.log_prob(next_actions).sum(-1, keepdims=True)
             
-            nq1, nq2 = self.critic.apply(critic_target_params, next_features, next_actions)
+            nq1, nq2 = critic.apply(critic_target_params, next_features, next_actions)
             v = jnp.minimum(nq1, nq2) - jnp.exp(log_alpha) * log_probs
-            target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * v)
+            target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * v)
 
             # get the actual q values
-            q1, q2 = self.critic.apply(critic_params, features, transitions.actions)
+            q1, q2 = critic.apply(critic_params, features, transitions.actions)
             
             q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
             return q_loss
@@ -238,23 +238,23 @@ class SAC:
             
             # get reward aug
             reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - self.reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
+            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
             
             # encode observations
-            features = self.encoder.apply(encoder_params, transitions.obs)
-            next_features = self.encoder.apply(encoder_params, transitions.next_obs)
+            features = encoder.apply(encoder_params, transitions.obs)
+            next_features = encoder.apply(encoder_params, transitions.next_obs)
             
             # get the targets
-            dist = self.actor.apply(actor_params, next_features)
+            dist = actor.apply(actor_params, next_features)
             next_actions = dist.sample(seed=key)
             log_probs = dist.log_prob(next_actions).sum(-1, keepdims=True)
             
-            nq1, nq2 = self.critic.apply(critic_target_params, features, next_actions)
+            nq1, nq2 = critic.apply(critic_target_params, features, next_actions)
             v = jnp.minimum(nq1, nq2) - jnp.exp(log_alpha) * log_probs
-            target_q = jax.lax.stop_gradient(transitions.rewards + self.cfg.discount * (1.0 - transitions.dones) * v)
+            target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * v)
 
             # get the actual q values
-            q1, q2 = self.critic.apply(critic_params, features, transitions.actions)
+            q1, q2 = critic.apply(critic_params, features, transitions.actions)
             
             q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
             return q_loss
@@ -273,14 +273,14 @@ class SAC:
             transitions = flatten_data(transitions)
             
             # encode observations
-            features = self.encoder.apply(encoder_params, transitions.obs)
+            features = encoder.apply(encoder_params, transitions.obs)
             features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through to world model
 
-            dist = self.actor.apply(actor_params, features)
+            dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_probs = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            q1, q2 = self.critic.apply(critic_params, features, actions)
+            q1, q2 = critic.apply(critic_params, features, actions)
             min_q = jnp.minimum(q1, q2)
             actor_loss = jnp.exp(log_alpha) * log_probs - min_q
             return jnp.mean(actor_loss)
@@ -296,14 +296,14 @@ class SAC:
             del step
             
             # encode observations
-            features = self.encoder.apply(encoder_params, transitions.obs)
+            features = encoder.apply(encoder_params, transitions.obs)
             features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through to world model
 
-            dist = self.actor.apply(actor_params, features)
+            dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_probs = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            q1, q2 = self.critic.apply(critic_params, features, actions)
+            q1, q2 = critic.apply(critic_params, features, actions)
             min_q = jnp.minimum(q1, q2)
             actor_loss = jnp.exp(log_alpha) * log_probs - min_q
             return jnp.mean(actor_loss)
@@ -320,14 +320,14 @@ class SAC:
             # flatten data again
             transitions = flatten_data(transitions)
             
-            features = self.encoder.apply(encoder_params, transitions.obs)
+            features = encoder.apply(encoder_params, transitions.obs)
             features = jax.lax.stop_gradient(features)
             
-            dist = self.actor.apply(actor_params, features)
+            dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_prob = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - self.target_entropy)
+            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - target_entropy)
             return jnp.mean(alpha_loss)
         
         @jax.jit
@@ -339,14 +339,14 @@ class SAC:
                            step: int):
             del step
             
-            features = self.encoder.apply(encoder_params, transitions.obs)
+            features = encoder.apply(encoder_params, transitions.obs)
             features = jax.lax.stop_gradient(features)
             
-            dist = self.actor.apply(actor_params, features)
+            dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_prob = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - self.target_entropy)
+            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - target_entropy)
             return jnp.mean(alpha_loss)
         
         @jax.jit
@@ -355,7 +355,7 @@ class SAC:
                           key: jax.random.PRNGKey,
                           step: int):
             # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
-            if self.cfg.reward_aug == 'byol':
+            if cfg.reward_aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(critic_loss_byol, argnums=(0, 1))
             else:
                 loss_grad_fn = jax.value_and_grad(critic_loss_rnd, argnums=(0, 1))
@@ -365,21 +365,21 @@ class SAC:
                 train_state.critic_params,
                 train_state.critic_target_params,
                 train_state.actor_params,
-                train_state.log_alpha,
+                train_state.log_alpha_params,
                 transitions,
                 key,
                 step
             )
             
             # update both encoder and critic
-            enc_update, enc_opt_state = self.encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
+            enc_update, enc_opt_state = encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
             new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
             
-            critic_update, critic_opt_state = self.critic_opt.update(critic_grads, train_state.critic_opt_state)
+            critic_update, critic_opt_state = critic_opt.update(critic_grads, train_state.critic_opt_state)
             new_critic_params = optax.apply_updates(train_state.critic_params, critic_update)
             
             metrics = {
-                'critic_loss': loss.item()
+                'critic_loss': loss
             }
             
             new_vars = {
@@ -395,7 +395,7 @@ class SAC:
                          transitions: Transition,
                          key: jax.random.PRNGKey,
                          step: int):
-            if self.cfg.reward_aug == 'byol':
+            if cfg.reward_aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(actor_loss_byol)
             else:
                 loss_grad_fn = jax.value_and_grad(actor_loss_rnd)
@@ -403,17 +403,17 @@ class SAC:
             a_loss, a_grads = loss_grad_fn(train_state.actor_params,
                                            train_state.encoder_params,
                                            train_state.critic_params,
-                                           train_state.log_alpha, 
+                                           train_state.log_alpha_params, 
                                            transitions,
                                            key,
                                            step)
             
             # update actor params
-            actor_update, actor_opt_state = self.actor_opt.update(a_grads, train_state.actor_opt_state)
+            actor_update, actor_opt_state = actor_opt.update(a_grads, train_state.actor_opt_state)
             new_actor_params = optax.apply_updates(train_state.actor_params, actor_update)
             
             metrics = {
-                'actor_loss': a_loss.item()
+                'actor_loss': a_loss
             }
             
             new_vars = {
@@ -427,7 +427,7 @@ class SAC:
                              transitions: Transition,
                              key: jax.random.PRNGKey,
                              step: int):
-            if self.cfg.reward_aug == 'byol':
+            if cfg.reward_aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(alpha_loss_byol)
             else:
                 loss_grad_fn = jax.value_and_grad(alpha_loss_rnd)
@@ -435,11 +435,11 @@ class SAC:
             alpha_loss, alpha_grads = loss_grad_fn(log_alpha, encoder_params, actor_params, transitions, key, step)
             
             # update alpha
-            alpha_update, new_log_alpha_opt_state = self.log_alpha_opt.update(alpha_grads, train_state.log_alpha_opt_state)
+            alpha_update, new_log_alpha_opt_state = log_alpha_opt.update(alpha_grads, train_state.log_alpha_opt_state)
             new_log_alpha_params = optax.apply_updates(train_state.log_alpha_params, alpha_update)
             
             metrics = {
-                'alpha_loss': alpha_loss.item()
+                'alpha_loss': alpha_loss
             }
             
             new_vars = {
@@ -499,6 +499,13 @@ class SAC:
                 upd_train_state.critic_params,
                 upd_train_state.critic_target_params,
                 self.ema
+            )
+            
+            new_target_params = jax.lax.cond(
+                step % target_update_frequency == 0,
+                lambda _: new_target_params,
+                lambda _: upd_train_state.critic_target_params,
+                operand=None
             )
             
             new_train_state = upd_train_state._replace(
