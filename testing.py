@@ -121,7 +121,7 @@ def test_iterative_dataloading():
 @hydra.main(config_path='cfgs', config_name='config')
 def test_bonus(cfg, byol=False):
     '''Test that bonus on non-medium dataset is lower than bonus on expert or random dataset.'''
-    env = make_gym_env(cfg.task)
+    env = make_gym_env(cfg.task, cfg.level)
     cfg.obs_shape = env.observation_space.shape
     cfg.action_shape = env.action_space.shape
     

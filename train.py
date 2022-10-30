@@ -46,8 +46,9 @@ class Workspace:
         self.agent_dir.mkdir(parents=True, exist_ok=True)
         
         if self.cfg.task in MUJOCO_ENVS:
-            self.train_env = make_gym_env(self.cfg.task)
-            self.eval_env = make_gym_env(self.cfg.task)
+            self.train_env = make_gym_env(self.cfg.task, self.cfg.level)
+            self.eval_env = make_gym_env(self.cfg.task, self.cfg.level)
+            self.eval_env.seed(self.cfg.seed + 12345)
             
             self.cfg.obs_shape = self.train_env.observation_space.shape
             self.cfg.action_shape = self.train_env.action_space.shape
@@ -240,10 +241,13 @@ class Workspace:
                 
             episode_rewards.append(episode_reward)
             episode_count += 1
-            
+        
+        avg_reward = np.mean(episode_rewards)
+        d4rl_normalized_score = self.eval_env.get_normalized_score(avg_reward) * 100
         metrics = {
-            'eval_rew_mean': np.mean(episode_rewards),
-            'eval_rew_std': np.std(episode_rewards)
+            'eval_rew_mean': avg_reward,
+            'eval_rew_std': np.std(episode_rewards),
+            'd4rl_normalized_score': d4rl_normalized_score
         }
         if self.cfg.wandb:
             wandb.log(metrics)

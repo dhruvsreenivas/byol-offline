@@ -86,9 +86,9 @@ MUJOCO_ENVS = {
 
 LEVELS = ['random', 'medium', 'expert', 'medium-replay', 'medium-expert']
 
-def make_gym_env(name):
-    '''Makes training/eval envs.'''
-    env_name = MUJOCO_ENVS[name]
+def make_gym_env(name, capability):
+    '''Makes training/eval envs for D4RL training/evaluation.'''
+    env_name = name + '-' + capability + '-v2'
     return gym.make(env_name)
 
 def get_gym_dataset(name, capability, q_learning=True):
