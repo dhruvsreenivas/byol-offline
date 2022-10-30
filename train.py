@@ -91,14 +91,15 @@ class Workspace:
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs)
-                self.dataset_stats = (
-                    rnd_buffer.state_mean,
-                    rnd_buffer.action_mean,
-                    rnd_buffer.next_state_mean,
-                    rnd_buffer.state_scale,
-                    rnd_buffer.action_scale,
-                    rnd_buffer.next_state_scale
-                )
+                if self.cfg.normalize_inputs:
+                    self.dataset_stats = (
+                        rnd_buffer.state_mean,
+                        rnd_buffer.action_mean,
+                        rnd_buffer.next_state_mean,
+                        rnd_buffer.state_scale,
+                        rnd_buffer.action_scale,
+                        rnd_buffer.next_state_scale
+                    )
             
             self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
@@ -229,7 +230,9 @@ class Workspace:
             while not done:
                 # normalize if needed
                 if self.cfg.normalize_inputs:
-                    ob = (ob - self.state_mean) / self.state_scale
+                    state_mean = self.dataset_stats[0]
+                    state_std = self.dataset_stats[3]
+                    ob = (ob - state_mean) / state_std
                 
                 action = self.agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
