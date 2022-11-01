@@ -105,7 +105,8 @@ class Workspace:
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
+            self.rnd_dataloader, stats = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
+            self.dataset_stats = stats
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
@@ -126,7 +127,7 @@ class Workspace:
                 self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                self.agent_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs)
+                self.agent_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs)
         
         # RL agent
         if self.cfg.learner == 'ddpg':
@@ -252,6 +253,7 @@ class Workspace:
             'eval_rew_std': np.std(episode_rewards),
             'd4rl_normalized_score': d4rl_normalized_score
         }
+        
         if self.cfg.wandb:
             wandb.log(metrics)
         else:

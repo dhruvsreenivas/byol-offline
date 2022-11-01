@@ -18,7 +18,7 @@ obs_shape: ???
 action_shape: ???
 model_train_epochs: 1000
 model_batch_size: 50
-seq_len: 50
+seq_len: 10
 max_steps: 1000000 # to be on par with D4RL
 
 # general args (world model + policies + everything else)

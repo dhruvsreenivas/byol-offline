@@ -29,14 +29,14 @@ class ClippedNormal(distrax.Normal):
     
 def squashed_normal_dist(loc, scale):
     # TODO: find out whether to do normal vs multivariate normal diag
-    return distrax.Transformed(distrax.Normal(loc, scale), distrax.Block(distrax.Tanh(), ndims=1))
+    return distrax.Transformed(distrax.Normal(loc, scale), distrax.Tanh())
 
 INITIALIZERS = {
     'xavier_uniform': hk.initializers.VarianceScaling(1.0, 'fan_avg', 'uniform'),
     'conv2d_orthogonal': hk.initializers.Orthogonal(scale=jnp.sqrt(2)),
     'linear_orthogonal': hk.initializers.Orthogonal(scale=1.0),
-    'zeros': hk.initializers.Constant(0.0)
+    'zeros': hk.initializers.Constant(0.0),
+    'uniform': hk.initializers.UniformScaling(scale=0.333),
+    'he_uniform': hk.initializers.VarianceScaling(2.0, "fan_in",  "uniform"),
+    'he_normal': hk.initializers.VarianceScaling(2.0, "fan_in",  "truncated_normal")
 }
-        
-        
-        

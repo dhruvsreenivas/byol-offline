@@ -314,6 +314,8 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
     
     if normalize:
         stats = get_mujoco_dataset_transformations(dataset)
+    else:
+        stats = None
     
     dataset = tf.data.Dataset.from_tensor_slices(dataset)
     dataset = dataset.batch(batch_size, drop_remainder=True)
@@ -335,4 +337,4 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
     if prefetch:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
-    return tfds.as_numpy(dataset)
+    return tfds.as_numpy(dataset), stats

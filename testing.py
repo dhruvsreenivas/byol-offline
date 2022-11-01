@@ -93,7 +93,7 @@ def batch_eq(batch1, batch2):
 def test_iterative_dataloading():
     name = 'hopper'
     capability = 'medium'
-    loader = rnd_iterative_dataloader(name, capability, batch_size=1024)
+    loader, _ = rnd_iterative_dataloader(name, capability, batch_size=1024, normalize=True)
     
     batches = []
     for epoch in range(2):
@@ -181,4 +181,4 @@ def test_reward(cfg):
     print(f'stats for expert dataset: {np.mean(expert_rewards)}, {np.std(expert_rewards)}')
     
 if __name__ == '__main__':
-    test_bonus()
+    test_iterative_dataloading()

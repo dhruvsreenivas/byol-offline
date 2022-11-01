@@ -1,6 +1,6 @@
-import jax
 import jax.numpy as jnp
 import haiku as hk
+import optax
 
 class RMS(object):
     """running mean and std """
@@ -23,6 +23,11 @@ class RMS(object):
 
         return self.M, self.S
     
+def get_penalized_rewards(rewards: jnp.ndarray, reward_pen: jnp.ndarray, reward_lambda: float, min_rew: float=-1, max_rew: float=1):
+    '''Scaling and clipping pessimism bonus so Q values don't blow up.'''
+    unclipped_rewards = rewards - reward_lambda * reward_pen
+    return jnp.clip(unclipped_rewards, min_rew, max_rew)
+    
 def update_target(params: hk.Params, target_params: hk.Params, ema: float):
-    target_params = jax.tree_util.tree_map(lambda x, y: ema * x + (1.0 - ema) * y, params, target_params)
+    target_params = optax.incremental_update(params, target_params, step_size=ema)
     return target_params

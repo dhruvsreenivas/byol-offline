@@ -82,7 +82,7 @@ class TD3:
         
         # ================== START OF ALL FNS ==================
         
-        def act(obs: jnp.ndarray, step: int, eval_mode: bool=False):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool):
             del step
             del eval_mode
             
@@ -112,7 +112,7 @@ class TD3:
             next_actions = jnp.clip(next_actions + noise, -max_action, max_action)
             
             target_q1, target_q2 = critic.apply(target_critic_params, transitions.next_obs, next_actions)
-            target_q = jnp.minimum(target_q1, target_q2)
+            target_q = jnp.squeeze(jnp.minimum(target_q1, target_q2))
             target_v = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * target_q)
             
             q1, q2 = critic.apply(critic_params, transitions.obs, transitions.actions)
@@ -201,7 +201,7 @@ class TD3:
                 critic_opt_state=critic_new_vars['critic_opt_state']
             )
             
-            def update_actor_and_target(train_state):
+            def update_actor_and_target(train_state: TD3TrainState):
                 actor_metrics, actor_new_vars = update_actor(
                     train_state,
                     transitions,

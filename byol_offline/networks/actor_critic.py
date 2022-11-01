@@ -12,7 +12,7 @@ class DDPGActor(hk.Module):
         self.trunk = hk.Sequential([
             hk.Linear(feature_dim, w_init=INITIALIZERS['linear_orthogonal']),
             hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
-            jnp.tanh
+            jax.lax.tanh
         ])
         
         self.policy = hk.Sequential([
@@ -27,7 +27,7 @@ class DDPGActor(hk.Module):
         h = self.trunk(obs)
         
         mu = self.policy(h)
-        mu = jnp.tanh(mu)
+        mu = jax.lax.tanh(mu)
         std = jnp.ones_like(mu) * std
         
         dist = ClippedNormal(mu, std)
@@ -40,7 +40,7 @@ class DDPGCritic(hk.Module):
         self.trunk = hk.Sequential([
             hk.Linear(feature_dim, w_init=INITIALIZERS['linear_orthogonal']),
             hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
-            jnp.tanh
+            jax.lax.tanh
         ])
         
         self.q1 = hk.Sequential([
@@ -82,9 +82,9 @@ class TD3Actor(hk.Module):
         x = jax.nn.relu(x)
         x = hk.Linear(self._hidden_dim)(x)
         x = jax.nn.relu(x)
-        x = hk.Linear(self._action_dim)(x)
+        x = hk.Linear(self._action_dim, w_init=hk.initializers.VarianceScaling(1e-4))(x)
         
-        x = jnp.tanh(x)
+        x = jax.lax.tanh(x)
         return x * self._max_action
     
 class TD3Critic(hk.Module):
@@ -173,11 +173,11 @@ class BCActor(hk.Module):
     def __init__(self, hidden_dim, action_shape):
         super().__init__()
         self._hidden_dim = hidden_dim
-        self._action_shape = action_shape
+        self._action_dim = action_shape[0]
         
     def __call__(self, obs):
         net = hk.nets.MLP(
-            [self._hidden_dim, self._hidden_dim, 2 * self._action_shape[0]],
+            [self._hidden_dim, self._hidden_dim, 2 * self._action_dim],
             activation=jax.nn.relu
         )
         out = net(obs)

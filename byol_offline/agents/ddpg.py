@@ -211,7 +211,7 @@ class DDPG:
             next_actions = dist.sample(seed=key, clip=std_clip_val)
             
             nq1, nq2 = critic.apply(critic_target_params, next_features, next_actions)
-            nv = jnp.minimum(nq1, nq2)
+            nv = jnp.squeeze(jnp.minimum(nq1, nq2))
             target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * nv)
 
             # get the actual q values
@@ -241,7 +241,7 @@ class DDPG:
             next_actions = dist.sample(seed=key, clip=std_clip_val)
             
             nq1, nq2 = critic.apply(critic_target_params, next_features, next_actions)
-            nv = jnp.minimum(nq1, nq2)
+            nv = jnp.squeeze(jnp.minimum(nq1, nq2))
             target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * nv)
 
             # get the actual q values
