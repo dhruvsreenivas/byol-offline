@@ -28,6 +28,7 @@ def get_mujoco_dataset_transformations(dataset):
     '''Get normalization constants for the D4RL dataset we are working with.'''
     observations = dataset["observations"]
     actions = dataset["actions"]
+    rewards = dataset["rewards"]
     next_observations = dataset["next_observations"]
 
     state_mean = np.mean(observations, axis=0).astype(np.float32)
@@ -37,8 +38,13 @@ def get_mujoco_dataset_transformations(dataset):
     state_scale = np.abs(observations - state_mean).mean(axis=0).astype(np.float32) + 1e-8
     action_scale = np.abs(actions - action_mean).mean(axis=0).astype(np.float32) + 1e-8
     next_state_scale = np.abs(next_observations - next_state_mean).mean(axis=0).astype(np.float32) + 1e-8
+    
+    # reward max + min
+    reward_min = np.min(rewards)
+    reward_max = np.max(rewards)
+    reward_info = (reward_min, reward_max)
 
-    return state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale
+    return state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale, reward_info
 
 def normalize_sa(states, actions, stats):
     state_mean, action_mean, _, state_scale, action_scale, _ = stats
@@ -175,7 +181,9 @@ class D4RLSequenceReplayBuffer:
         self.normalize = normalize
         if normalize:
             means_scales = get_mujoco_dataset_transformations(self.dataset)
-            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale = means_scales
+            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale, reward_info = means_scales
+            self.reward_min = reward_info[0]
+            self.reward_max = reward_info[1]
         
     def _sample(self):
         # sampling full sequence
@@ -202,7 +210,9 @@ class D4RLTransitionReplayBuffer:
         self.normalize = normalize
         if normalize:
             means_scales = get_mujoco_dataset_transformations(self.dataset)
-            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale = means_scales
+            self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale, reward_info = means_scales
+            self.reward_min = reward_info[0]
+            self.reward_max = reward_info[1]
         
     def _sample(self):
         # sampling single item
@@ -323,7 +333,7 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
     
     if normalize:
         def normalize_map(state, action, reward, next_state, done):
-            state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale = stats
+            state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale, _ = stats
             
             normalized_state = (state - state_mean) / state_scale
             normalized_action = (action - action_mean) / action_scale

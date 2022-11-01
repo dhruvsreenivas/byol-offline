@@ -104,6 +104,8 @@ class DDPG:
         )
         
         # hyperparameters for training
+        reward_min = cfg.reward_min
+        reward_max = cfg.reward_max
         reward_lambda = cfg.reward_lambda
         ema = cfg.ema
         init_std = cfg.init_std
@@ -196,7 +198,8 @@ class DDPG:
                              step: int):
             # get reward penalty
             reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure gradients don't go back through world model
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
 
             # flatten data, as this is BYOL critic loss (we've already added reward so no need to treat as sequence anymore)
             transitions = flatten_data(transitions)
@@ -229,7 +232,8 @@ class DDPG:
                             key, step):
             # get reward penalty
             reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure no gradients go back through world model
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
 
             # encode observations
             features = encoder.apply(encoder_params, transitions.obs)

@@ -113,6 +113,8 @@ class SAC:
             rng_key=key4
         )
         
+        reward_min = cfg.reward_min
+        reward_max = cfg.reward_max
         reward_lambda = cfg.reward_lambda
         self.ema = cfg.ema
         target_update_frequency = cfg.target_update_frequency
@@ -199,9 +201,10 @@ class SAC:
                              step: int):
             del step
             
-            # get reward aug
-            reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
+            # get reward penalty
+            reward_pen = get_reward_aug(transitions.obs, transitions.actions) # detached already
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
 
             # flatten transitions (BYOL loss is sequential)
             transitions = flatten_data(transitions)
@@ -236,9 +239,10 @@ class SAC:
                             step: int):
             del step
             
-            # get reward aug
-            reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # don't want extra gradients going back to encoder params
+            # get reward penalty
+            reward_pen = get_reward_aug(transitions.obs, transitions.actions) # detached already
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
             
             # encode observations
             features = encoder.apply(encoder_params, transitions.obs)

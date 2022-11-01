@@ -73,6 +73,8 @@ class TD3:
         )
         
         # other TD3 hparams
+        reward_min = cfg.reward_min
+        reward_max = cfg.reward_max
         reward_lambda = cfg.reward_lambda
         max_action = cfg.max_action
         ema = cfg.ema
@@ -101,7 +103,8 @@ class TD3:
                         step: int):
             del step
             reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            transitions = transitions._replace(rewards=transitions.rewards - reward_lambda * jax.lax.stop_gradient(reward_pen)) # make sure gradients don't go back through world model
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            transitions = transitions._replace(rewards=penalized_rewards) # make sure gradients don't go back through world model
             
             # targets
             actions = transitions.actions

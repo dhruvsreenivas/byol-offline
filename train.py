@@ -100,6 +100,9 @@ class Workspace:
                         rnd_buffer.action_scale,
                         rnd_buffer.next_state_scale
                     )
+                    # set reward min + max
+                    self.cfg.reward_min = rnd_buffer.reward_min
+                    self.cfg.reward_max = rnd_buffer.reward_max
             
             self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
