@@ -325,13 +325,11 @@ class SAC:
             transitions = flatten_data(transitions)
             
             features = encoder.apply(encoder_params, transitions.obs)
-            features = jax.lax.stop_gradient(features)
-            
             dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_prob = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - target_entropy)
+            alpha_loss = jnp.exp(log_alpha) * jax.lax.stop_gradient(-log_prob - target_entropy)
             return jnp.mean(alpha_loss)
         
         @jax.jit
@@ -344,13 +342,11 @@ class SAC:
             del step
             
             features = encoder.apply(encoder_params, transitions.obs)
-            features = jax.lax.stop_gradient(features)
-            
             dist = actor.apply(actor_params, features)
             actions = dist.sample(seed=key)
             log_prob = dist.log_prob(actions).sum(-1, keepdims=True)
             
-            alpha_loss = jnp.exp(log_alpha) - jax.lax.stop_gradient(-log_prob - target_entropy)
+            alpha_loss = jnp.exp(log_alpha) * jax.lax.stop_gradient(-log_prob - target_entropy)
             return jnp.mean(alpha_loss)
         
         @jax.jit

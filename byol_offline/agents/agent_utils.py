@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import haiku as hk
 import optax
@@ -29,6 +30,11 @@ def scale_pen(reward_pen: jnp.ndarray, min_rew: float=-1, max_rew: float=1):
     diff = max_pen - min_pen + 1e-8
     scaled_pen = (max_rew - min_rew) * (reward_pen - min_pen) / diff + min_rew
     return scaled_pen
+
+def q_scaling_factor(q_values: jnp.ndarray, lmbda: float):
+    '''Q scaling factor from TD3+BC: https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py#L141'''
+    factor = lmbda / jnp.mean(jnp.abs(q_values))
+    return jax.lax.stop_gradient(factor)
     
 def get_penalized_rewards(rewards: jnp.ndarray, reward_pen: jnp.ndarray, reward_lambda: float, min_rew: float=-1, max_rew: float=1):
     '''Scaling and clipping pessimism bonus.'''

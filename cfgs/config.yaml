@@ -57,7 +57,7 @@ wandb: true
 save_model: true
 model_save_every: 100
 
-# agent training hparams (common for all)
+# agent training params (common for all)
 reward_min: ???
 reward_max: ???
 

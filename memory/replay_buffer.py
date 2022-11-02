@@ -216,7 +216,7 @@ class D4RLTransitionReplayBuffer:
         
     def _sample(self):
         # sampling single item
-        idx = np.random.randint(0, self.n_samples) # TODO: figure out how to pad for more data
+        idx = np.random.randint(0, self.n_samples)
         obs = self.dataset['observations'][idx]
         action = self.dataset['actions'][idx]
         reward = self.dataset['rewards'][idx]

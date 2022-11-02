@@ -110,6 +110,10 @@ class Workspace:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             self.rnd_dataloader, stats = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
             self.dataset_stats = stats
+            
+            # set reward max + min
+            self.cfg.reward_min = stats[-1][0]
+            self.cfg.reward_max = stats[-1][1]
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
