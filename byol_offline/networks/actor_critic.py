@@ -76,13 +76,15 @@ class TD3Actor(hk.Module):
         self._hidden_dim = hidden_dim
         self._action_dim = action_shape[0]
         self._max_action = max_action
+        
+        self._weight_init = INITIALIZERS['he_uniform']
     
     def __call__(self, obs):
-        x = hk.Linear(self._hidden_dim)(obs)
+        x = hk.Linear(self._hidden_dim, w_init=self._weight_init)(obs)
         x = jax.nn.relu(x)
-        x = hk.Linear(self._hidden_dim)(x)
+        x = hk.Linear(self._hidden_dim, w_init=self._weight_init)(x)
         x = jax.nn.relu(x)
-        x = hk.Linear(self._action_dim, w_init=hk.initializers.VarianceScaling(1e-4))(x)
+        x = hk.Linear(self._action_dim, w_init=self._weight_init)(x)
         
         x = jax.lax.tanh(x)
         return x * self._max_action
@@ -91,24 +93,25 @@ class TD3Critic(hk.Module):
     '''TD3 critic for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
     def __init__(self, hidden_dim):
         super().__init__()
-        self._hidden_dim = hidden_dim
+        
+        self.q1 = hk.nets.MLP(
+            [hidden_dim, hidden_dim, 1],
+            w_init=INITIALIZERS['he_uniform'],
+            name='q1'
+        )
+        
+        self.q2 = hk.nets.MLP(
+            [hidden_dim, hidden_dim, 1],
+            w_init=INITIALIZERS['he_uniform'],
+            name='q2'
+        )
         
     def __call__(self, obs, action):
         sa = jnp.concatenate([obs, action], axis=-1)
         
-        # first critic
-        q1 = hk.Linear(self._hidden_dim)(sa)
-        q1 = jax.nn.relu(q1)
-        q1 = hk.Linear(self._hidden_dim)(q1)
-        q1 = jax.nn.relu(q1)
-        q1 = hk.Linear(1)(q1)
-        
-        # second critic
-        q2 = hk.Linear(self._hidden_dim)(sa)
-        q2 = jax.nn.relu(q2)
-        q2 = hk.Linear(self._hidden_dim)(q2)
-        q2 = jax.nn.relu(q2)
-        q2 = hk.Linear(1)(q2)
+        # twin critic outputs
+        q1 = self.q1(sa)
+        q2 = self.q2(sa)
         
         return q1, q2
     

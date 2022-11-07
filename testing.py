@@ -6,9 +6,13 @@ import jax.numpy as jnp
 import numpy as np
 import haiku as hk
 import hydra
+import gym
 from pathlib import Path
+from tqdm import trange
+import wandb
 
 from byol_offline.models import *
+from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
 from utils import get_gym_dataset, make_gym_env
 
@@ -180,5 +184,110 @@ def test_reward(cfg):
     print(f'stats for medium dataset: {np.mean(medium_rewards)}, {np.std(medium_rewards)}')
     print(f'stats for expert dataset: {np.mean(expert_rewards)}, {np.std(expert_rewards)}')
     
+@hydra.main(config_path='cfgs', config_name='config')
+def test_rl_algo(cfg):
+    '''Testing undelying RL algos for sanity checking purposes.'''
+    assert cfg.reward_aug == 'none', 'Not doing any pessimism when testing online RL algo implementation.'
+    
+    # env + seed
+    train_env = gym.make('Hopper-v2')
+    eval_env = gym.make('Hopper-v2')
+    train_env.seed(0)
+    train_env.action_space.seed(0)
+    eval_env.seed(100)
+    np.random.seed(0)
+    
+    # cfg update, exploration noise + buffer
+    cfg.obs_shape = train_env.observation_space.shape
+    cfg.action_shape = train_env.action_space.shape
+    cfg.max_action = float(train_env.action_space.high[0])
+    cfg.reward_min = -1.0
+    cfg.reward_max = 1.0
+    expl_noise = 0.1
+    buffer = ReplayBuffer(int(1e6), cfg.obs_shape[0], cfg.action_shape[0])
+    
+    # init project
+    entity = 'dhruv_sreenivas'
+    wandb.init(project=cfg.project_name, entity=entity, name='td3 hopperv2')
+    
+    # agent setup
+    agent = TD3(cfg)
+    
+    def eval_policy(n_episodes=10):
+        ep_rews = []
+        ep_lens = []
+        for _ in range(n_episodes):
+            ob = eval_env.reset()
+            done = False
+            
+            ep_rew = 0.0
+            ep_len = 0
+            while not done:
+                action = agent._act(ob, 0, True)
+                ob, rew, done, _ = eval_env.step(action)
+                ep_rew += rew
+                ep_len += 1
+            
+            ep_rews.append(ep_rew)
+            ep_lens.append(ep_len)
+            
+        mean_rew, std_rew = np.mean(ep_rews), np.std(ep_rews)
+        mean_len, std_len = np.mean(ep_lens), np.std(ep_lens)
+        metric_dict = {
+            'mean_rew': mean_rew,
+            'std_rew': std_rew,
+            'mean_len': mean_len,
+            'std_len': std_len
+        }
+        wandb.log(metric_dict)
+    
+    # training loop
+    ob, done = train_env.reset(), False
+    episode_timesteps = 0
+    episode_reward = 0.0
+    for it in trange(int(1e6)):
+        
+        # do exploration if not collected enough yet
+        if it < 10000: # hardcoded for TD3
+            action = train_env.action_space.sample()
+        else:
+            agent_action = agent._act(ob, 0, False)
+            noise = np.random.normal(0, cfg.max_action * expl_noise, size=agent_action.shape)
+            action = np.clip(agent_action + noise, -cfg.max_action, cfg.max_action)
+            
+        # step env
+        n_ob, rew, done, _ = train_env.step(action)
+        episode_timesteps += 1
+        done_bool = done if episode_timesteps < train_env._max_episode_steps else False
+        
+        # add to replay buffer
+        buffer.add(ob, action, rew, n_ob, done_bool)
+        
+        ob = n_ob
+        episode_reward += rew
+        
+        # train when ready
+        if it >= 25000:
+            transitions = buffer.sample(256)
+            new_train_state, train_metrics = agent._update(agent.train_state, transitions, it)
+            agent.train_state = new_train_state
+            
+            logged_metrics = {}
+            for k, v in train_metrics.items():
+                if v < jnp.inf:
+                    logged_metrics[k] = v
+                    
+            wandb.log(logged_metrics)
+            
+        # reset episode measures when done
+        if done:
+            # print(f'Total iters: {it + 1}, episode timesteps: {episode_timesteps}, episode reward: {episode_reward}')
+            ob, done = train_env.reset(), False
+            episode_timesteps = 0
+            episode_reward = 0.0
+            
+        if it % 50000 == 0:
+            eval_policy()
+    
 if __name__ == '__main__':
-    test_iterative_dataloading()
+    test_rl_algo()

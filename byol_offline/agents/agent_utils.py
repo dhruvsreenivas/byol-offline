@@ -36,12 +36,17 @@ def q_scaling_factor(q_values: jnp.ndarray, lmbda: float):
     factor = lmbda / jnp.mean(jnp.abs(q_values))
     return jax.lax.stop_gradient(factor)
     
-def get_penalized_rewards(rewards: jnp.ndarray, reward_pen: jnp.ndarray, reward_lambda: float, min_rew: float=-1, max_rew: float=1):
-    '''Scaling and clipping pessimism bonus.'''
+def get_penalized_rewards(rewards: jnp.ndarray, reward_pen: jnp.ndarray, reward_lambda: float, min_rew: float=-1, max_rew: float=1, clip: bool=False):
+    '''Scaling and clipping pessimism penalty.'''
     scaled_pen = scale_pen(reward_pen, min_rew, max_rew)
-    unclipped_rewards = rewards - reward_lambda * scaled_pen
-    return jnp.clip(unclipped_rewards, min_rew, max_rew)
+    unclipped_rewards = rewards - reward_lambda * scaled_pen # [-2, 2]
+    out_rewards = jnp.where(clip, jnp.clip(unclipped_rewards, min_rew, max_rew), unclipped_rewards)
+    return out_rewards
     
 def update_target(params: hk.Params, target_params: hk.Params, ema: float):
-    target_params = optax.incremental_update(params, target_params, step_size=ema)
+    target_params = optax.incremental_update(
+        new_tensors=params,
+        old_tensors=target_params,
+        step_size=ema
+    )
     return target_params

@@ -101,8 +101,8 @@ class Workspace:
                         rnd_buffer.next_state_scale
                     )
                     # set reward min + max
-                    self.cfg.reward_min = rnd_buffer.reward_min
-                    self.cfg.reward_max = rnd_buffer.reward_max
+                    self.cfg.reward_min = float(rnd_buffer.reward_min)
+                    self.cfg.reward_max = float(rnd_buffer.reward_max)
             
             self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
@@ -112,8 +112,8 @@ class Workspace:
             self.dataset_stats = stats
             
             # set reward max + min
-            self.cfg.reward_min = stats[-1][0]
-            self.cfg.reward_max = stats[-1][1]
+            self.cfg.reward_min = float(stats[-1][0])
+            self.cfg.reward_max = float(stats[-1][1])
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:

@@ -41,12 +41,16 @@ class TD3:
             def reward_aug_fn(obs, acts):
                 # dummy step because we delete it anyway
                 return rnd._compute_uncertainty(obs, acts, 0)
-        else:
+        elif cfg.reward_aug == 'byol':
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
             assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
             def reward_aug_fn(obs, acts):
                 # dummy step again because we delete it
                 return byol._compute_uncertainty(obs, acts, 0)
+        else:
+            # no reward augmentation
+            def reward_aug_fn(obs, acts):
+                return jnp.float32(0.0)
             
         # initialization
         rng = jax.random.PRNGKey(cfg.seed)
@@ -73,10 +77,12 @@ class TD3:
         )
         
         # other TD3 hparams
+        penalize = cfg.penalize
         reward_min = cfg.reward_min
         reward_max = cfg.reward_max
         reward_lambda = cfg.reward_lambda
         max_action = cfg.max_action
+        discount = cfg.discount
         ema = cfg.ema
         policy_noise = cfg.policy_noise * max_action
         noise_clip = cfg.noise_clip * max_action
@@ -102,9 +108,11 @@ class TD3:
                         key: jax.random.PRNGKey,
                         step: int):
             del step
-            reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
-            transitions = transitions._replace(rewards=penalized_rewards) # make sure gradients don't go back through world model
+            
+            if penalize:
+                reward_pen = get_reward_aug(transitions.obs, transitions.actions)
+                penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+                transitions = transitions._replace(rewards=penalized_rewards) # make sure gradients don't go back through world model
             
             # targets
             actions = transitions.actions
@@ -116,7 +124,7 @@ class TD3:
             
             target_q1, target_q2 = critic.apply(target_critic_params, transitions.next_obs, next_actions)
             target_q = jnp.squeeze(jnp.minimum(target_q1, target_q2))
-            target_v = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * target_q)
+            target_v = jax.lax.stop_gradient(transitions.rewards + discount * (1.0 - transitions.dones) * target_q)
             
             q1, q2 = critic.apply(critic_params, transitions.obs, transitions.actions)
             q_loss = jnp.mean(jnp.square(q1 - target_v)) + jnp.mean(jnp.square(q2 - target_v))
@@ -235,7 +243,7 @@ class TD3:
                 
                 return upd_train_state, actor_metrics
             
-            def stay_the_same(train_state):
+            def stay_the_same(train_state: TD3TrainState):
                 empty_dict = {
                     'actor_loss': jnp.inf
                 }
@@ -247,6 +255,8 @@ class TD3:
                 stay_the_same,
                 operand=upd_train_state
             )
+            
+            # update RNG key for next time
             new_train_state = upd_train_state._replace(
                 rng_key=key2
             )

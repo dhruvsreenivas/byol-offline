@@ -348,3 +348,43 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
     return tfds.as_numpy(dataset), stats
+
+class ReplayBuffer:
+    '''Normal replay buffer, used in testing online RL algorithms.'''
+    def __init__(self, max_size, state_dim, action_dim):
+        self._max_size = max_size
+        self._state_dim = state_dim
+        self._action_dim = action_dim
+        
+        self.setup()
+        
+    def setup(self):
+        self._states = np.empty((self._max_size, self._state_dim), dtype=np.float32)
+        self._actions = np.empty((self._max_size, self._action_dim), dtype=np.float32)
+        self._rewards = np.empty((self._max_size,), dtype=np.float32)
+        self._next_states = np.empty((self._max_size, self._state_dim), dtype=np.float32)
+        self._dones = np.empty((self._max_size,), dtype=np.float32)
+        
+        self._n = 0
+        self._p = 0
+        
+    def add(self, state, action, reward, next_state, done):
+        self._states[self._p] = state
+        self._actions[self._p] = action
+        self._rewards[self._p] = reward
+        self._next_states[self._p] = next_state
+        self._dones[self._p] = np.float32(done)
+        
+        self._p = (self._p + 1) % self._max_size
+        self._n = min(self._n + 1, self._max_size)
+        
+    def sample(self, batch_size):
+        idxs = np.random.randint(0, self._n, size=batch_size)
+        
+        states = self._states[idxs]
+        actions = self._actions[idxs]
+        rewards = self._rewards[idxs]
+        next_states = self._next_states[idxs]
+        dones = self._dones[idxs]
+        
+        return Transition(states, actions, rewards, next_states, dones)

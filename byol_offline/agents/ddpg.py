@@ -57,12 +57,16 @@ class DDPG:
             def reward_aug_fn(obs, acts):
                 # dummy step because we delete it anyway
                 return rnd._compute_uncertainty(obs, acts, 0)
-        else:
+        elif cfg.reward_aug == 'byol':
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
             assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
             def reward_aug_fn(obs, acts):
                 # dummy step again because we delete it
                 return byol._compute_uncertainty(obs, acts, 0)
+        else:
+            # no reward pessimism
+            def reward_aug_fn(obs, acts):
+                return 0.0
         
         # initialization
         rng = jax.random.PRNGKey(cfg.seed)
