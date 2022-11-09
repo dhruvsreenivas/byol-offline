@@ -371,7 +371,7 @@ class Workspace:
     
     def train_simple(self):
         '''Train simple dynamics model.'''
-        for epoch in trange(1, self.cfg.model_train_epochs + 1):
+        for _ in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
                 transitions = Transition(*batch)

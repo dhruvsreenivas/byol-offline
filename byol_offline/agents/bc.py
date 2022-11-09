@@ -83,7 +83,6 @@ class BC:
             
             return action
         
-        @jax.jit
         def loss_fn(encoder_params: hk.Params,
                     actor_params: hk.Params,
                     obs: jnp.ndarray,

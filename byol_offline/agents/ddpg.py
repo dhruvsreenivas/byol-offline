@@ -151,7 +151,6 @@ class DDPG:
     
         # =================== WARMSTARTING ===================
         
-        @jax.jit
         def bc_loss(encoder_params: hk.Params,
                     actor_params: hk.Params,
                     obs: jnp.ndarray,
@@ -192,7 +191,6 @@ class DDPG:
         
         # =================== AGENT LOSS/UPDATE FUNCTIONS ===================
         
-        @jax.jit
         def critic_loss_byol(encoder_params: hk.Params,
                              critic_params: hk.Params,
                              critic_target_params: hk.Params,
@@ -227,7 +225,6 @@ class DDPG:
             q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
             return q_loss
 
-        @jax.jit
         def critic_loss_rnd(encoder_params: hk.Params,
                             critic_params: hk.Params,
                             critic_target_params: hk.Params, 
@@ -258,7 +255,6 @@ class DDPG:
             q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
             return q_loss
         
-        @jax.jit
         def actor_loss_byol(actor_params: hk.Params,
                             encoder_params: hk.Params,
                             critic_params: hk.Params,
@@ -280,7 +276,6 @@ class DDPG:
             actor_loss = -jnp.mean(jnp.minimum(q1, q2))
             return actor_loss
         
-        @jax.jit
         def actor_loss_rnd(actor_params: hk.Params,
                            encoder_params: hk.Params,
                            critic_params: hk.Params,
@@ -299,7 +294,6 @@ class DDPG:
             actor_loss = -jnp.mean(jnp.minimum(q1, q2))
             return actor_loss
         
-        @jax.jit
         def update_critic(train_state: DDPGTrainState,
                           transitions: Transition,
                           key: jax.random.PRNGKey,
@@ -339,7 +333,6 @@ class DDPG:
             }
             return metrics, new_vars
         
-        @jax.jit
         def update_actor(train_state: DDPGTrainState,
                          transitions: Transition,
                          key: jax.random.PRNGKey,

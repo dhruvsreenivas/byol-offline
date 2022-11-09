@@ -16,7 +16,7 @@ from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
 from utils import get_gym_dataset, make_gym_env
 
-'''Various testing to make sure core machinery works.'''
+'''Various testing functions to make sure core machinery works.'''
 
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model(cfg):
@@ -192,10 +192,10 @@ def test_rl_algo(cfg):
     # env + seed
     train_env = gym.make('Hopper-v2')
     eval_env = gym.make('Hopper-v2')
-    train_env.seed(0)
-    train_env.action_space.seed(0)
-    eval_env.seed(100)
-    np.random.seed(0)
+    train_env.seed(cfg.seed)
+    train_env.action_space.seed(cfg.seed)
+    eval_env.seed(cfg.seed + 100)
+    np.random.seed(cfg.seed)
     
     # cfg update, exploration noise + buffer
     cfg.obs_shape = train_env.observation_space.shape
@@ -206,9 +206,12 @@ def test_rl_algo(cfg):
     expl_noise = 0.1
     buffer = ReplayBuffer(int(1e6), cfg.obs_shape[0], cfg.action_shape[0])
     
+    # rng key for sampling actions online
+    rng = jax.random.PRNGKey(cfg.seed + 42)
+    
     # init project
     entity = 'dhruv_sreenivas'
-    wandb.init(project=cfg.project_name, entity=entity, name='td3 hopperv2')
+    wandb.init(project=cfg.project_name, entity=entity, name=f'td3 hopperv2 seed {cfg.seed}')
     
     # agent setup
     agent = TD3(cfg)
@@ -247,13 +250,15 @@ def test_rl_algo(cfg):
     episode_reward = 0.0
     for it in trange(int(1e6)):
         
-        # do exploration if not collected enough yet
-        if it < 10000: # hardcoded for TD3
+        # do exploration if not collected enough data yet
+        if it < 25000: # hardcoded for TD3
             action = train_env.action_space.sample()
         else:
             agent_action = agent._act(ob, 0, False)
-            noise = np.random.normal(0, cfg.max_action * expl_noise, size=agent_action.shape)
-            action = np.clip(agent_action + noise, -cfg.max_action, cfg.max_action)
+            
+            rng, sub_rng = jax.random.split(rng)
+            noise = jax.random.normal(sub_rng, shape=agent_action.shape) * cfg.max_action * expl_noise # can also go to np.random.normal if needed
+            action = jnp.clip(agent_action + noise, -cfg.max_action, cfg.max_action)
             
         # step env
         n_ob, rew, done, _ = train_env.step(action)
@@ -286,8 +291,10 @@ def test_rl_algo(cfg):
             episode_timesteps = 0
             episode_reward = 0.0
             
-        if it % 50000 == 0:
+        if (it + 1) % 5000 == 0:
             eval_policy()
+            
+    wandb.finish()
     
 if __name__ == '__main__':
     test_rl_algo()

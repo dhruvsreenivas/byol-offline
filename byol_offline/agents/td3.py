@@ -123,7 +123,7 @@ class TD3:
             next_actions = jnp.clip(next_actions + noise, -max_action, max_action)
             
             target_q1, target_q2 = critic.apply(target_critic_params, transitions.next_obs, next_actions)
-            target_q = jnp.squeeze(jnp.minimum(target_q1, target_q2))
+            target_q = jnp.minimum(target_q1, target_q2)
             target_v = jax.lax.stop_gradient(transitions.rewards + discount * (1.0 - transitions.dones) * target_q)
             
             q1, q2 = critic.apply(critic_params, transitions.obs, transitions.actions)

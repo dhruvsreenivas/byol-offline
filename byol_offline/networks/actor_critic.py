@@ -65,7 +65,7 @@ class DDPGCritic(hk.Module):
         q1 = self.q1(h_a)
         q2 = self.q2(h_a)
         
-        return q1, q2
+        return jnp.squeeze(q1), jnp.squeeze(q2)
 
 # ============================== TD3 ==============================
 
@@ -97,12 +97,14 @@ class TD3Critic(hk.Module):
         self.q1 = hk.nets.MLP(
             [hidden_dim, hidden_dim, 1],
             w_init=INITIALIZERS['he_uniform'],
+            activation=jax.nn.relu,
             name='q1'
         )
         
         self.q2 = hk.nets.MLP(
             [hidden_dim, hidden_dim, 1],
             w_init=INITIALIZERS['he_uniform'],
+            activation=jax.nn.relu,
             name='q2'
         )
         
@@ -113,7 +115,7 @@ class TD3Critic(hk.Module):
         q1 = self.q1(sa)
         q2 = self.q2(sa)
         
-        return q1, q2
+        return jnp.squeeze(q1), jnp.squeeze(q2)
     
 # ============================== SAC ==============================
     
@@ -167,7 +169,7 @@ class SACCritic(hk.Module):
         q1 = self.q1(obs_action)
         q2 = self.q2(obs_action)
         
-        return q1, q2
+        return jnp.squeeze(q1), jnp.squeeze(q2)
 
 # ============================== BC ==============================
 
