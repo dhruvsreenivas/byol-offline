@@ -111,7 +111,7 @@ class TD3:
             
             if penalize:
                 reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-                penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+                penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max, clip=cfg.clip)
                 transitions = transitions._replace(rewards=penalized_rewards) # make sure gradients don't go back through world model
             
             # targets

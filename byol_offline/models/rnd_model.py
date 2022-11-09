@@ -88,6 +88,12 @@ class RNDModelTrainer:
         else:
             rnd_params = rnd.init(k1, batched_zeros_like(cfg.obs_shape))
             target_params = rnd.init(k2, batched_zeros_like(cfg.obs_shape))
+            
+        # if parallelizing, put copy of params on all devices
+        if cfg.pmap:
+            device_lst = jax.devices()
+            rnd_params = jax.device_put_replicated(rnd_params, device_lst)
+            target_params = jax.device_put_replicated(target_params, device_lst)
         
         # optimizer
         if cfg.optim == 'adam':
@@ -96,7 +102,12 @@ class RNDModelTrainer:
             rnd_opt = optax.adamw(cfg.lr)
         else:
             rnd_opt = optax.sgd(cfg.lr, momentum=0.9)
-        rnd_opt_state = rnd_opt.init(rnd_params)
+        
+        opt_init_fn = rnd_opt.init
+        if cfg.pmap:
+            rnd_opt_state = jax.pmap(opt_init_fn)(rnd_params)
+        else:
+            rnd_opt_state = opt_init_fn(rnd_params)
         
         self.train_state = RNDTrainState(
             params=rnd_params,
@@ -128,6 +139,11 @@ class RNDModelTrainer:
             else:
                 loss_grad_fn = jax.value_and_grad(rnd_loss_fn)
                 loss, grads = loss_grad_fn(train_state.params, train_state.target_params, obs)
+                
+            # avg gradients across parallel devices
+            if cfg.pmap:
+                loss = jax.lax.pmean(loss, axis_name='device')
+                grads = jax.lax.pmean(grads, axis_name='device')
             
             update, new_opt_state = rnd_opt.update(grads, train_state.opt_state)
             new_params = optax.apply_updates(train_state.params, update)
@@ -161,6 +177,10 @@ class RNDModelTrainer:
         # define update + uncertainty computation
         self._update = jax.jit(update)
         self._compute_uncertainty = jax.jit(compute_uncertainty)
+        
+        if cfg.pmap:
+            self._update = jax.pmap(self._update)
+            self._compute_uncertainty = jax.pmap(self._compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

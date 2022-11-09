@@ -105,6 +105,12 @@ class WorldModelTrainer:
         wm_params = wm.init(k1, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
         target_params = wm.init(k2, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
         
+        # copy params across devices if required
+        if cfg.pmap:
+            device_lst = jax.devices()
+            wm_params = jax.device_put_replicated(wm_params, device_lst)
+            target_params = jax.device_put_replicated(target_params, device_lst)
+        
         # optimizer
         if cfg.optim == 'adam':
             wm_opt = optax.adam(cfg.lr)
@@ -112,7 +118,12 @@ class WorldModelTrainer:
             wm_opt = optax.adamw(cfg.lr)
         else:
             wm_opt = optax.sgd(cfg.lr, momentum=0.9)
-        wm_opt_state = wm_opt.init(wm_params)
+        
+        wm_opt_init_fn = wm_opt.init
+        if cfg.pmap:
+            wm_opt_state = jax.pmap(wm_opt_init_fn)(wm_params)
+        else:
+            wm_opt_state = wm_opt_init_fn(wm_params)
         
         self.train_state = BYOLTrainState(
             wm_params=wm_params,
@@ -182,8 +193,8 @@ class WorldModelTrainer:
             (loss, _), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions)
             
             if cfg.pmap:
-                loss = jax.tree_util.tree_map(lambda l: jax.lax.pmean(l, axis_name='i'), loss)
-                grads = jax.tree_util.tree_map(lambda g: jax.lax.pmean(g, axis_name='i'), grads)
+                loss = jax.lax.pmean(loss, axis_name='device') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
+                grads = jax.lax.pmean(grads, axis_name='device')
             
             update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
@@ -213,12 +224,12 @@ class WorldModelTrainer:
             return jax.lax.stop_gradient(losses)
         
         self._update = jax.jit(update)
+        self._compute_uncertainty = jax.jit(compute_uncertainty)
         
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         if cfg.pmap:
-            self._update = jax.pmap(self._update, axis_name='i')
-        
-        self._compute_uncertainty = jax.jit(compute_uncertainty)
+            self._update = jax.pmap(self._update)
+            self._compute_uncertainty = jax.pmap(self._compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

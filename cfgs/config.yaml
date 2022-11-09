@@ -33,6 +33,7 @@ sample_batches: false
 
 # reward augmentations
 reward_aug: rnd
+clip: false
 
 # what to train
 load_model: false
@@ -61,6 +62,9 @@ reward_min: ???
 reward_max: ???
 penalize: true
 
+# parallelization
+pmap: false
+
 byol:
   task: ${task}
   seed: ${seed}
@@ -69,7 +73,7 @@ byol:
   optim: adam
   lr: 1e-3
   ema: 0.99
-  pmap: false
+  pmap: ${pmap}
 
   vd4rl:
     obs_shape: ${obs_shape}
@@ -93,6 +97,7 @@ rnd:
   optim: adam
   lr: 1e-3
   cat_actions: false
+  pmap: ${pmap}
 
   vd4rl:
     dreamer: ${dreamer}
