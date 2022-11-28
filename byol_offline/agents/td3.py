@@ -35,21 +35,21 @@ class TD3:
         critic = hk.without_apply_rng(hk.transform(critic_fn))
         
         # reward pessimism
-        if cfg.reward_aug == 'rnd':
+        if cfg.aug == 'rnd':
             assert rnd is not None, "Can't use RND when model doesn't exist."
             assert type(rnd) == RNDModelTrainer, "Not an RND model trainer--BAD!"
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 # dummy step because we delete it anyway
                 return rnd._compute_uncertainty(obs, acts, 0)
-        elif cfg.reward_aug == 'byol':
+        elif cfg.aug == 'byol':
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
             assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 # dummy step again because we delete it
                 return byol._compute_uncertainty(obs, acts, 0)
         else:
             # no reward augmentation
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 return jnp.float32(0.0)
             
         # initialization
@@ -78,9 +78,10 @@ class TD3:
         
         # other TD3 hparams
         penalize = cfg.penalize
+        penalize_q = cfg.penalize_q
         reward_min = cfg.reward_min
         reward_max = cfg.reward_max
-        reward_lambda = cfg.reward_lambda
+        lam = cfg.lam
         max_action = cfg.max_action
         discount = cfg.discount
         ema = cfg.ema
@@ -97,8 +98,8 @@ class TD3:
             actor_params = self.train_state.actor_params
             return actor.apply(actor_params, obs)
 
-        def get_reward_aug(observations: jnp.ndarray, actions: jnp.ndarray):
-            return reward_aug_fn(observations, actions)
+        def get_aug(observations: jnp.ndarray, actions: jnp.ndarray):
+            return aug_fn(observations, actions)
         
         @jax.jit
         def critic_loss(critic_params: hk.Params,
@@ -109,9 +110,9 @@ class TD3:
                         step: int):
             del step
             
-            if penalize:
-                reward_pen = get_reward_aug(transitions.obs, transitions.actions)
-                penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max, clip=cfg.clip)
+            if penalize and not penalize_q:
+                reward_pen = get_aug(transitions.obs, transitions.actions)
+                penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max, clip=cfg.clip)
                 transitions = transitions._replace(rewards=penalized_rewards) # make sure gradients don't go back through world model
             
             # targets
@@ -139,6 +140,11 @@ class TD3:
             
             actions = actor.apply(actor_params, transitions.obs)
             q1, _ = critic.apply(critic_params, transitions.obs, actions)
+            
+            if penalize_q:
+                q_pen = get_aug(transitions.obs, transitions.actions)
+                q1 = q1 - lam * q_pen
+                
             actor_loss = -jnp.mean(q1)
             return actor_loss
         

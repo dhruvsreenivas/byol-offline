@@ -35,7 +35,7 @@ class SAC:
         
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
         if cfg.task not in MUJOCO_ENVS:
-            if byol is None or cfg.reward_aug == 'rnd':
+            if byol is None or cfg.aug == 'rnd':
                 encoder_fn = lambda obs: DrQv2Encoder()(obs)
             else:
                 encoder_fn = lambda obs: DreamerEncoder(cfg.depth)(obs)
@@ -54,21 +54,21 @@ class SAC:
         critic = hk.without_apply_rng(hk.transform(critic_fn))
 
         # reward pessimism (currently using different encoder than the DrQv2 stuff--maybe have to change)
-        if cfg.reward_aug == 'rnd':
+        if cfg.aug == 'rnd':
             assert rnd is not None, "Can't use RND when model doesn't exist."
             assert type(rnd) == RNDModelTrainer, "Not an RND model trainer--BAD!"
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 # dummy step because we delete it anyway
                 return rnd.compute_uncertainty(obs, acts, 0)
-        elif cfg.reward_aug == 'byol':
+        elif cfg.aug == 'byol':
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
             assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 # dummy step again because we delete it
                 return byol.compute_uncertainty(obs, acts, 0)
         else:
             # no reward pessimism
-            def reward_aug_fn(obs, acts):
+            def aug_fn(obs, acts):
                 return 0.0
         
         # initialization
@@ -78,7 +78,7 @@ class SAC:
         encoder_params = encoder.init(key1, batched_zeros_like(cfg.obs_shape))
         
         if cfg.task not in MUJOCO_ENVS:
-            if byol is None or cfg.reward_aug == 'rnd':
+            if byol is None or cfg.aug == 'rnd':
                 actor_params = actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
                 critic_params = critic_target_params = critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
             else:
@@ -119,7 +119,7 @@ class SAC:
         
         reward_min = cfg.reward_min
         reward_max = cfg.reward_max
-        reward_lambda = cfg.reward_lambda
+        lam = cfg.lam
         self.ema = cfg.ema
         target_update_frequency = cfg.target_update_frequency
         target_entropy = -np.prod(cfg.action_shape)
@@ -147,8 +147,8 @@ class SAC:
             
             return action
 
-        def get_reward_aug(observations: jnp.ndarray, actions: jnp.ndarray):
-            return reward_aug_fn(observations, actions)
+        def get_aug(observations: jnp.ndarray, actions: jnp.ndarray):
+            return aug_fn(observations, actions)
         
         # =================== WARMSTARTING ===================
         
@@ -206,8 +206,8 @@ class SAC:
             del step
             
             # get reward penalty
-            reward_pen = get_reward_aug(transitions.obs, transitions.actions) # detached already
-            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            reward_pen = get_aug(transitions.obs, transitions.actions) # detached already
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max)
             transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
 
             # flatten transitions (BYOL loss is sequential)
@@ -244,8 +244,8 @@ class SAC:
             del step
             
             # get reward penalty
-            reward_pen = get_reward_aug(transitions.obs, transitions.actions) # detached already
-            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, reward_lambda, reward_min, reward_max)
+            reward_pen = get_aug(transitions.obs, transitions.actions) # detached already
+            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max)
             transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
             
             # encode observations
@@ -359,7 +359,7 @@ class SAC:
                           key: jax.random.PRNGKey,
                           step: int):
             # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
-            if cfg.reward_aug == 'byol':
+            if cfg.aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(critic_loss_byol, argnums=(0, 1))
             else:
                 loss_grad_fn = jax.value_and_grad(critic_loss_rnd, argnums=(0, 1))
@@ -399,7 +399,7 @@ class SAC:
                          transitions: Transition,
                          key: jax.random.PRNGKey,
                          step: int):
-            if cfg.reward_aug == 'byol':
+            if cfg.aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(actor_loss_byol)
             else:
                 loss_grad_fn = jax.value_and_grad(actor_loss_rnd)
@@ -431,7 +431,7 @@ class SAC:
                              transitions: Transition,
                              key: jax.random.PRNGKey,
                              step: int):
-            if cfg.reward_aug == 'byol':
+            if cfg.aug == 'byol':
                 loss_grad_fn = jax.value_and_grad(alpha_loss_byol)
             else:
                 loss_grad_fn = jax.value_and_grad(alpha_loss_rnd)

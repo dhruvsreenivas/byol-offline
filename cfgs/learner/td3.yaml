@@ -6,7 +6,7 @@ critic_lr: 3e-4
 
 # hparams
 max_action: ???
-reward_lambda: 0.5
+lam: 0.5
 discount: 0.99
 ema: 0.005
 policy_noise: 0.2

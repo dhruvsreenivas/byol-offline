@@ -382,12 +382,12 @@ class Workspace:
                 for k, v in metrics.items():
                     epoch_metrics[k].update(v, obs.shape[0])
 
-                if self.cfg.wandb:
-                    log_dump = {k: v.value() for k, v in epoch_metrics.items()}
-                    wandb.log(log_dump)
-                else:
-                    log_dump = {k: v.value() for k, v in epoch_metrics.items()}
-                    print_dict(log_dump)
+            if self.cfg.wandb:
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                wandb.log(log_dump)
+            else:
+                log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+                print_dict(log_dump)
                     
     def train_one_datapoint(self):
         '''Train on one datapoint to make sure loss goes down.'''
