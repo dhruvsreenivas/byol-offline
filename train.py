@@ -33,7 +33,7 @@ class Workspace:
             self.offline_dir = Path(to_absolute_path('offline_data')) / self.cfg.task / self.cfg.level
 
         # assert that we're training byol model and using byol as reward aug at the same time
-        assert (self.cfg.train_byol and self.cfg.reward_aug == 'byol') or (not self.cfg.train_byol and self.cfg.reward_aug == 'rnd'), "Can't train model and then not use said model in RL training."
+        assert (self.cfg.train_byol and self.cfg.aug == 'byol') or (not self.cfg.train_byol and self.cfg.aug == 'rnd'), "Can't train model and then not use said model in RL training."
         
         # model directories
         self.pretrained_byol_dir = Path(to_absolute_path('pretrained_models')) / 'byol' / self.cfg.task / self.cfg.level
@@ -74,13 +74,13 @@ class Workspace:
         
         # RND model stuff
         self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
-        if self.cfg.load_model and self.cfg.reward_aug == 'rnd':
+        if self.cfg.load_model and self.cfg.aug == 'rnd':
             model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl'
             self.rnd_trainer.load(model_path)
 
         # BYOL model stuff
         self.byol_trainer = WorldModelTrainer(self.cfg.byol)
-        if self.cfg.load_model and self.cfg.reward_aug == 'byol':
+        if self.cfg.load_model and self.cfg.aug == 'byol':
             model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl'
             self.byol_trainer.load(model_path)
             

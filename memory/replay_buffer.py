@@ -3,6 +3,7 @@ import traceback
 import random
 from utils import get_gym_dataset
 from collections import namedtuple
+from typing import Union
 
 # tensorflow dataset utilities
 import tensorflow as tf
@@ -257,10 +258,10 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
     done = tf.transpose(done, (1, 0))
     return obs, action, reward, next_obs, done
 
-def byol_sampling_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceReplayBuffer,
-                             max_steps,
-                             batch_size,
-                             prefetch=True):
+def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequenceReplayBuffer],
+                             max_steps: int,
+                             batch_size: int,
+                             prefetch: bool = True):
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
@@ -286,10 +287,10 @@ def byol_sampling_dataloader(buffer: VD4RLSequenceReplayBuffer or D4RLSequenceRe
     
     return tfds.as_numpy(dataset)
 
-def rnd_sampling_dataloader(buffer: VD4RLTransitionReplayBuffer or D4RLTransitionReplayBuffer,
-                            max_steps,
-                            batch_size,
-                            prefetch=True):
+def rnd_sampling_dataloader(buffer: Union[VD4RLTransitionReplayBuffer, D4RLTransitionReplayBuffer],
+                            max_steps: int,
+                            batch_size: int,
+                            prefetch: bool = True):
     obs, action, reward, next_obs, done = buffer._sample()
     done = np.float32(done)
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype

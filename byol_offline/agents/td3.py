@@ -125,7 +125,12 @@ class TD3:
             
             target_q1, target_q2 = critic.apply(target_critic_params, transitions.next_obs, next_actions)
             target_q = jnp.minimum(target_q1, target_q2)
-            target_v = jax.lax.stop_gradient(transitions.rewards + discount * (1.0 - transitions.dones) * target_q)
+            target_v = transitions.rewards + discount * (1.0 - transitions.dones) * target_q
+            if penalize and penalize_q:
+                v_pen = get_aug(transitions.next_obs, next_actions)
+                target_v = target_v - v_pen
+            
+            target_v = jax.lax.stop_gradient(target_v)
             
             q1, q2 = critic.apply(critic_params, transitions.obs, transitions.actions)
             q_loss = jnp.mean(jnp.square(q1 - target_v)) + jnp.mean(jnp.square(q2 - target_v))
@@ -135,14 +140,19 @@ class TD3:
         def actor_loss(actor_params: hk.Params,
                        critic_params: hk.Params,
                        transitions: Transition,
+                       key: jax.random.PRNGKey,
                        step: int):
             del step
             
             actions = actor.apply(actor_params, transitions.obs)
+            if penalize_q:
+                noise = jax.random.normal(key, shape=actions.shape)
+                actions = actions + policy_noise * noise
+            
             q1, _ = critic.apply(critic_params, transitions.obs, actions)
             
             if penalize_q:
-                q_pen = get_aug(transitions.obs, transitions.actions)
+                q_pen = get_aug(transitions.obs, actions)
                 q1 = q1 - lam * q_pen
                 
             actor_loss = -jnp.mean(q1)
@@ -178,12 +188,14 @@ class TD3:
         @jax.jit
         def update_actor(train_state: TD3TrainState,
                          transitions: Transition,
+                         key: jax.random.PRNGKey,
                          step: int):
             
             loss_grad_fn = jax.value_and_grad(actor_loss)
             loss, grads = loss_grad_fn(train_state.actor_params,
                                        train_state.critic_params,
                                        transitions,
+                                       key,
                                        step)
             
             update, new_actor_opt_state = actor_opt.update(grads, train_state.actor_opt_state)
@@ -204,12 +216,12 @@ class TD3:
                    transitions: Transition,
                    step: int):
             
-            key1, key2 = jax.random.split(train_state.rng_key)
+            critic_key, actor_key, state_key = jax.random.split(train_state.rng_key, 3)
             
             critic_metrics, critic_new_vars = update_critic(
                 train_state,
                 transitions,
-                key1,
+                critic_key,
                 step
             )
             
@@ -222,6 +234,7 @@ class TD3:
                 actor_metrics, actor_new_vars = update_actor(
                     train_state,
                     transitions,
+                    actor_key,
                     step
                 )
                 
@@ -264,7 +277,7 @@ class TD3:
             
             # update RNG key for next time
             new_train_state = upd_train_state._replace(
-                rng_key=key2
+                rng_key=state_key
             )
             
             metrics = {**critic_metrics, **actor_metrics}

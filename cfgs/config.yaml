@@ -103,11 +103,11 @@ rnd:
   vd4rl:
     dreamer: ${dreamer}
     depth: ${depth}
-    hidden_dim: ${hidden_dim}
+    hidden_dim: 256
     repr_dim: 50
   
   d4rl:
-    hidden_dim: ${hidden_dim}
+    hidden_dim: 256
     repr_dim: 50
 
 simple_dynamics:
