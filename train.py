@@ -90,7 +90,7 @@ class Workspace:
                 rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs)
+                rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs, normalize_reward=self.cfg.normalize_inputs)
                 if self.cfg.normalize_inputs:
                     self.dataset_stats = (
                         rnd_buffer.state_mean,
@@ -120,7 +120,7 @@ class Workspace:
             byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs)
+            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs, normalize_reward=self.cfg.normalize_inputs)
             # already got stats by this point so we're good
             
         self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)

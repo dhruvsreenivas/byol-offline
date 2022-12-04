@@ -33,7 +33,6 @@ sample_batches: false
 
 # reward augmentations
 aug: rnd
-penalize_q: false
 clip: false
 
 # what to train
@@ -62,6 +61,7 @@ model_save_every: 100
 reward_min: ???
 reward_max: ???
 penalize: true
+penalize_q: false
 
 # parallelization
 pmap: false
@@ -99,6 +99,7 @@ rnd:
   lr: 1e-3
   cat_actions: false
   pmap: ${pmap}
+  l1: false
 
   vd4rl:
     dreamer: ${dreamer}

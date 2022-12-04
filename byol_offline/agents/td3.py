@@ -125,11 +125,11 @@ class TD3:
             
             target_q1, target_q2 = critic.apply(target_critic_params, transitions.next_obs, next_actions)
             target_q = jnp.minimum(target_q1, target_q2)
-            target_v = transitions.rewards + discount * (1.0 - transitions.dones) * target_q
             if penalize and penalize_q:
-                v_pen = get_aug(transitions.next_obs, next_actions)
-                target_v = target_v - v_pen
+                q_pen = get_aug(transitions.next_obs, next_actions)
+                target_q = target_q - lam * q_pen
             
+            target_v = transitions.rewards + discount * (1.0 - transitions.dones) * target_q
             target_v = jax.lax.stop_gradient(target_v)
             
             q1, q2 = critic.apply(critic_params, transitions.obs, transitions.actions)
@@ -153,7 +153,7 @@ class TD3:
             
             if penalize_q:
                 q_pen = get_aug(transitions.obs, actions)
-                q1 = q1 - lam * q_pen
+                q1 = q1 - lam * q_pen # trying + instead of - to see how shitty it is
                 
             actor_loss = -jnp.mean(q1)
             return actor_loss

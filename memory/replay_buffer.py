@@ -53,12 +53,22 @@ def normalize_sa(states, actions, stats):
     actions = (actions - action_mean) / action_scale
     return states, actions
 
+def normalize_rewards_d4rl(dataset):
+    '''Returns dataset with normalized rewards.'''
+    rewards = dataset['rewards']
+    reward_mean, reward_std = np.mean(rewards), np.std(rewards)
+    normalized_rewards = (rewards - reward_mean) / (reward_std + 1e-8)
+    dataset['rewards'] = normalized_rewards
+
+    return dataset
+
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
-    def __init__(self, data_dir, seq_len):
+    def __init__(self, data_dir, seq_len, normalize_reward=False):
         self._data_dir = data_dir
         self._seq_len = seq_len
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
+        self._normalize_reward = normalize_reward
         
         # filenames
         self._episode_fns = []
@@ -174,7 +184,7 @@ class VD4RLTransitionReplayBuffer:
         return obs, action, reward, next_obs, done
     
 class D4RLSequenceReplayBuffer:
-    def __init__(self, env_name, capability, seq_len, normalize=True):
+    def __init__(self, env_name, capability, seq_len, normalize=True, normalize_reward=False):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
         self.n_samples = self.dataset['observations'].shape[0]
         self._seq_len = seq_len
@@ -185,6 +195,9 @@ class D4RLSequenceReplayBuffer:
             self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale, reward_info = means_scales
             self.reward_min = reward_info[0]
             self.reward_max = reward_info[1]
+        
+        if normalize_reward:
+            self.dataset = normalize_rewards_d4rl(self.dataset)
         
     def _sample(self):
         # sampling full sequence
@@ -204,7 +217,7 @@ class D4RLSequenceReplayBuffer:
         return obs, action, reward, next_obs, done
 
 class D4RLTransitionReplayBuffer:
-    def __init__(self, env_name, capability, normalize=True):
+    def __init__(self, env_name, capability, normalize=True, normalize_reward=False):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
         self.n_samples = self.dataset['observations'].shape[0]
 
@@ -214,6 +227,9 @@ class D4RLTransitionReplayBuffer:
             self.state_mean, self.action_mean, self.next_state_mean, self.state_scale, self.action_scale, self.next_state_scale, reward_info = means_scales
             self.reward_min = reward_info[0]
             self.reward_max = reward_info[1]
+            
+        if normalize_reward:
+            self.dataset = normalize_rewards_d4rl(self.dataset)
         
     def _sample(self):
         # sampling single item
@@ -230,7 +246,7 @@ class D4RLTransitionReplayBuffer:
             action = (action - self.action_mean) / self.action_scale
             next_obs = (next_obs - self.next_state_mean) / self.next_state_scale
         
-        return obs, action, reward, next_obs, done
+        return obs, action, reward, next_obs, done, idx
         
 def generator_fn(buffer, max_steps=None):
     if max_steps is not None:

@@ -120,6 +120,9 @@ class RNDModelTrainer:
             output = rnd.apply(params, obs)
             target_output = rnd.apply(target_params, obs)
             
+            if cfg.l1:
+                return jnp.mean(jnp.abs(target_output - output))
+            
             # no need to do jax.lax.stop_gradient, as gradient is only taken w.r.t. first param
             return jnp.mean(jnp.square(target_output - output))
         
@@ -127,6 +130,9 @@ class RNDModelTrainer:
         def rnd_loss_fn_actions(params, target_params, obs, actions):
             output = rnd.apply(params, obs, actions)
             target_output = rnd.apply(target_params, obs, actions)
+            
+            if cfg.l1:
+                return jnp.mean(jnp.abs(target_output - output))
             
             return jnp.mean(jnp.square(target_output - output))
     
@@ -171,8 +177,12 @@ class RNDModelTrainer:
                 online_output = rnd.apply(self.train_state.params, obs)
                 target_output = rnd.apply(self.train_state.target_params, obs)
             
-            squared_diff = jnp.square(target_output - online_output).sum(-1)
-            return jax.lax.stop_gradient(squared_diff)
+            if cfg.l1:
+                diff = jnp.abs(target_output - online_output).sum(-1)
+            else:
+                diff = jnp.square(target_output - online_output).sum(-1)
+            
+            return jax.lax.stop_gradient(diff)
         
         # define update + uncertainty computation
         self._update = jax.jit(update)
