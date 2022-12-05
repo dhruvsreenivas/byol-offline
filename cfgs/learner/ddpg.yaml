@@ -1,0 +1,16 @@
+learner: ddpg
+
+# learning rates
+encoder_lr: 1e-4
+actor_lr: 1e-4
+critic_lr: 1e-4
+
+# hyperparameters
+discount: 0.99
+lam: 0.5
+ema: 0.01
+init_std: 1.0
+final_std: 0.1
+std_duration: 500000
+std_clip_val: 0.3
+update_every_steps: 1 # TODO maybe reset to 2
