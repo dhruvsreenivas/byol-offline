@@ -1,0 +1,135 @@
+defaults:
+  - _self_
+  - task@_global_: ???
+  - learner@_global_: ddpg
+
+project_name: ???
+seed: 0
+level: med_exp
+train_byol: true
+
+# environment parameters
+img_size: 64
+frame_stack: 1
+action_repeat: 2
+
+# world model training + RND model training
+obs_shape: ???
+action_shape: ???
+model_train_epochs: 1000
+model_batch_size: 50
+seq_len: 10
+max_steps: 1000000 # to be on par with D4RL
+
+# general args (world model + policies + everything else)
+feature_dim: 200
+hidden_dim: 128
+dreamer: false
+depth: 32
+
+# dataset args
+normalize_inputs: true
+sample_batches: false
+
+# reward augmentations
+aug: rnd
+clip: false
+
+# what to train
+load_model: false
+
+# bc warmstart args
+bc_warmstart: false
+bc_epochs: 100
+
+# policy training args
+policy_train_epochs: 1000
+policy_rb_capacity: 1000000
+policy_batch_size: 50
+
+# policy evaluation args
+policy_eval_every: 100
+num_eval_episodes: 10
+policy_save_every: 100
+
+# logging
+wandb: true
+save_model: true
+model_save_every: 100
+
+# agent training params (common for all)
+reward_min: ???
+reward_max: ???
+penalize: true
+penalize_q: false
+
+# parallelization
+pmap: false
+
+byol:
+  task: ${task}
+  seed: ${seed}
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  optim: adam
+  lr: 1e-3
+  ema: 0.99
+  pmap: ${pmap}
+
+  vd4rl:
+    obs_shape: ${obs_shape}
+    seq_len: ${seq_len}
+    dreamer: ${dreamer}
+    depth: ${depth}
+    gru_hidden_size: 256
+  
+  d4rl:
+    obs_shape: ${obs_shape}
+    seq_len: ${seq_len}
+    hidden_dim: 512
+    repr_dim: 128
+    gru_hidden_size: 64
+
+rnd:
+  task: ${task}
+  seed: ${seed}
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  optim: adam
+  lr: 1e-3
+  cat_actions: false
+  pmap: ${pmap}
+  l1: false
+
+  vd4rl:
+    dreamer: ${dreamer}
+    depth: ${depth}
+    hidden_dim: 256
+    repr_dim: 50
+  
+  d4rl:
+    hidden_dim: 256
+    repr_dim: 50
+
+simple_dynamics:
+  seed: ${seed}
+  model_type: mlp_dynamics
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  hidden_dim: ${hidden_dim}
+  optim: sgd
+  lr: 1e-4
+  train_for_diff: true
+  transform: ${transform}
+
+bc:
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  seed: ${seed}
+  hidden_dim: ${hidden_dim}
+  optim: adam
+  lr: 1e-4
+
+hydra:
+  run:
+    dir: ./local_runs/${now:%Y.%m.%d}/${now:%H%M%S}_${hydra.job.override_dirname}

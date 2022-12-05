@@ -1,5 +1,8 @@
-*__pycache__*
-local_runs/
 offline_data/
 pretrained_models/
 trained_policies/
+local_runs/
+logs/
+sub_files/
+*__pycache__*
+.DS_Store

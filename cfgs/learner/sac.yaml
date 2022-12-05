@@ -1,0 +1,13 @@
+learner: sac
+
+# learning rates
+encoder_lr: 5e-4
+actor_lr: 5e-4
+critic_lr: 5e-4
+alpha_lr: 5e-4
+
+# hyperparameters
+discount: 0.99
+lam: 0.5
+ema: 0.01
+target_update_freq: 2
