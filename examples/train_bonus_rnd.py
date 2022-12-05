@@ -17,7 +17,6 @@ from tqdm import tqdm
 import os
 import time
 
-
 def train(network, target_network, dataloader, optimizer, epoch, use_cuda):
 
     loss_func = nn.MSELoss(reduction='mean')
