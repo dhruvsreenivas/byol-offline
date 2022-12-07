@@ -158,3 +158,6 @@ class BYOLWorldModel(nn.Module):
         latents = self.predictor(states)
         
         return latents, embeddings
+    
+    def compute_uncertainty(self, seq_states, seq_actions):
+        '''BYOL-Explore uncertainty measurement.'''
