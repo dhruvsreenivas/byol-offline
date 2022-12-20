@@ -57,6 +57,8 @@ class MLPLatentWorldModel(hk.Module):
     '''Latent world model for D4RL tasks. Primarily inspired by MOPO repository.'''
     def __init__(self, cfg):
         super().__init__()
+        self._reconstruct = cfg.reconstruct
+        self._learn_reward = cfg.learn_reward
         
         # nets
         self.encoder = hk.nets.MLP(
@@ -66,6 +68,16 @@ class MLPLatentWorldModel(hk.Module):
         
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
+        
+        # decoding in general
+        if self._reconstruct:
+            self.decoder = hk.nets.MLP(
+                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.obs_shape[0]],
+                activation=jax.nn.swish
+            )
+        
+        if self._learn_reward:
+            self.reward_head = hk.Linear(1)
         
         self.predictor = BYOLPredictor(cfg.repr_dim)
     
@@ -85,7 +97,22 @@ class MLPLatentWorldModel(hk.Module):
         latents = hk.BatchApply(self.predictor)(states)
         
         pred_latents = jnp.concatenate([latent, latents])
-        return pred_latents, embeddings
+        
+        # if reconstructing, add reward, state preds (TODO: make distribution based or pure state based?)
+        all_states = jnp.concatenate([jnp.expand_dims(state, 0), states], axis=0)
+        hz = jnp.concatenate([all_states, embeddings], axis=-1)
+        if self._reconstruct:
+            img_preds = self.decoder(hz)
+        if self._learn_reward:
+            reward_preds = self.reward_head(hz)
+        
+        extras = []
+        if self._reconstruct:
+            extras.append(img_preds)
+        if self._learn_reward:
+            extras.append(reward_preds)
+        
+        return pred_latents, embeddings, extras
     
 class WorldModelTrainer:
     '''World model trainer.'''
@@ -148,10 +175,10 @@ class WorldModelTrainer:
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
             
-            pred_latents, _ = wm.apply(wm_params, obs_window, action_window)
+            pred_latents, _, _ = wm.apply(wm_params, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            _, target_latents = wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
+            _, target_latents, _ = wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
 
             # normalize latents

@@ -1,5 +1,4 @@
 import jax
-import jax.numpy as jnp
 import haiku as hk
 from byol_offline.networks.network_utils import INITIALIZERS
 

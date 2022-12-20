@@ -48,7 +48,7 @@ def get_mujoco_dataset_transformations(dataset):
     return state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale, reward_info
 
 def normalize_sa(states, actions, stats):
-    state_mean, action_mean, _, state_scale, action_scale, _ = stats
+    state_mean, action_mean, _, state_scale, action_scale, _, _ = stats
     states = (states - state_mean) / state_scale
     actions = (actions - action_mean) / action_scale
     return states, actions
@@ -110,8 +110,8 @@ class VD4RLSequenceReplayBuffer:
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - self._seq_len)
         obs = episode["image"][idx : idx + self._seq_len].astype(np.float32)
-        action = episode["action"][idx : idx + self._seq_len]
-        reward = episode["reward"][idx : idx + self._seq_len]
+        action = episode["action"][idx : idx + self._seq_len].astype(np.float32)
+        reward = episode["reward"][idx : idx + self._seq_len].astype(np.float32)
         next_obs = episode["image"][idx + 1 : idx + self._seq_len + 1].astype(np.float32)
         done = episode["is_terminal"][idx : idx + self._seq_len]
 

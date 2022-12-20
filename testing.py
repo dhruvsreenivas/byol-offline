@@ -135,7 +135,8 @@ def test_bonus(cfg, byol=False):
         trainer = RNDModelTrainer(cfg.rnd)
     
     action_dir = 'actions' if cfg.rnd.cat_actions else 'no_actions'
-    model_path = f'/home/ds844/byol-offline/pretrained_models/{"byol" if byol else "rnd"}/hopper/medium/{action_dir}/{"byol" if byol else "rnd"}_1000.pkl'
+    model_path = f'/home/ds844/byol-offline/pretrained_models/{"byol" if byol else "rnd"}/hopper/medium/{action_dir + "/" if not byol else ""}{"byol" if byol else "rnd"}_1000.pkl'
+    print(f'Model path: {model_path}')
     trainer.load(model_path)
     
     # grabbing data
@@ -160,6 +161,11 @@ def test_bonus(cfg, byol=False):
     expert_obs, expert_actions = normalize_sa(expert_obs, expert_actions, expert_stats)
     
     # uncertainties
+    if byol:
+        random_obs, random_actions = jnp.expand_dims(random_obs, 0), jnp.expand_dims(random_actions, 0) # (1, N, dim)
+        medium_obs, medium_actions = jnp.expand_dims(medium_obs, 0), jnp.expand_dims(medium_actions, 0)
+        expert_obs, expert_actions = jnp.expand_dims(expert_obs, 0), jnp.expand_dims(expert_actions, 0)
+    
     random_uncertainties = trainer._compute_uncertainty(random_obs, random_actions, 0)
     medium_uncertainties = trainer._compute_uncertainty(medium_obs, medium_actions, 0)
     expert_uncertainties = trainer._compute_uncertainty(expert_obs, expert_actions, 0)
@@ -297,4 +303,4 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    test_rl_algo()
+    test_bonus()

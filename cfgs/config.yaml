@@ -75,6 +75,8 @@ byol:
   lr: 1e-3
   ema: 0.99
   pmap: ${pmap}
+  reconstruct: false
+  learn_reward: false
 
   vd4rl:
     obs_shape: ${obs_shape}
@@ -82,6 +84,8 @@ byol:
     dreamer: ${dreamer}
     depth: ${depth}
     gru_hidden_size: 256
+    reconstruct: ${byol.reconstruct}
+    learn_reward: ${byol.learn_reward}
   
   d4rl:
     obs_shape: ${obs_shape}
@@ -89,6 +93,8 @@ byol:
     hidden_dim: 512
     repr_dim: 128
     gru_hidden_size: 64
+    reconstruct: ${byol.reconstruct}
+    learn_reward: ${byol.learn_reward}
 
 rnd:
   task: ${task}
@@ -110,6 +116,19 @@ rnd:
   d4rl:
     hidden_dim: 256
     repr_dim: 50
+
+ae:
+  seed: ${seed}
+  hidden_dim: 256
+  obs_shape: ${obs_shape}
+  action_shape: ${action_shape}
+  type: cond_ae
+  
+  feature_dim: 200
+  beta: 0.5
+  clip_log_std: true
+  activate_final: true
+  lr: 1e-3
 
 simple_dynamics:
   seed: ${seed}

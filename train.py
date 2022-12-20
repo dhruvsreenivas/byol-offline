@@ -40,6 +40,8 @@ class Workspace:
         self.pretrained_byol_dir.mkdir(parents=True, exist_ok=True)
         self.pretrained_rnd_dir = Path(to_absolute_path('pretrained_models')) / 'rnd' / self.cfg.task / self.cfg.level / ('actions' if self.cfg.rnd.cat_actions else 'no_actions')
         self.pretrained_rnd_dir.mkdir(parents=True, exist_ok=True)
+        self.pretrained_ae_dir = Path(to_absolute_path('pretrained_models')) / self.cfg.ae.type / self.cfg.task / self.cfg.level
+        self.pretrained_ae_dir.mkdir(parents=True, exist_ok=True)
         
         # trained agent directory
         self.agent_dir = Path(to_absolute_path('trained_policies')) / self.cfg.task / self.cfg.level / self.cfg.learner
@@ -125,6 +127,14 @@ class Workspace:
             
         self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         # TODO make BYOL dataloader iterative if needed
+        
+        # VAE model + dataloader
+        self.ae_trainer = AETrainer(self.cfg.ae)
+        if self.cfg.sample_batches:
+            self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+        else:
+            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+            self.ae_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
 
         # RL agent dataloader
         if self.cfg.train_byol:
@@ -196,6 +206,28 @@ class Workspace:
             if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
+                
+    def train_ae(self):
+        '''Train CVAE model from Offline RL as Anti-Exploration.'''
+        for epoch in trange(1, self.cfg.model_train_epochs + 1):
+            epoch_metrics = defaultdict(AverageMeter)
+            for batch in self.ae_dataloader:
+                obs, actions, _, _, _ = batch
+                new_train_state, batch_metrics = self.ae_trainer._update(self.ae_trainer.train_state, obs, actions, self.global_step)
+                self.ae_trainer.train_state = new_train_state
+                
+                for k, v in batch_metrics.items():
+                    epoch_metrics[k].update(v, obs.shape[0])
+                    
+            log_dump = {k: v.value() for k, v in epoch_metrics.items()}
+            if self.cfg.wandb:
+                wandb.log(log_dump)
+            else:
+                print_dict(log_dump)
+            
+            if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
+                model_path = self.pretrained_ae_dir / f'ae_{epoch}.pkl'
+                self.ae_trainer.save(model_path)
                 
     # ==================== AGENT TRAINING ====================
     
