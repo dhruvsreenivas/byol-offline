@@ -30,7 +30,9 @@ class Workspace:
     def setup(self):
         # offline directory
         if self.cfg.task not in MUJOCO_ENVS:
-            self.offline_dir = Path(to_absolute_path('offline_data')) / self.cfg.task / self.cfg.level
+            is_atari = self.cfg.task in ATARI_ENVS
+            dirname = 'atari' if is_atari else 'dmc'
+            self.offline_dir = Path(to_absolute_path('offline_data')) / dirname / self.cfg.task / self.cfg.level
 
         # assert that we're training byol model and using byol as reward aug at the same time
         assert (self.cfg.train_byol and self.cfg.aug == 'byol') or (not self.cfg.train_byol and self.cfg.aug == 'rnd'), "Can't train model and then not use said model in RL training."
@@ -55,6 +57,13 @@ class Workspace:
             self.cfg.obs_shape = self.train_env.observation_space.shape
             self.cfg.action_shape = self.train_env.action_space.shape
             self.cfg.max_action = float(self.train_env.action_space.high[0])
+        elif self.cfg.task in ATARI_ENVS:
+            self.train_env = make_atari_env(self.cfg.task, grayscale=self.cfg.grayscale_obs)
+            self.eval_env = make_atari_env(self.cfg.task, grayscale=self.cfg.grayscale_obs)
+            self.eval_env.seed(self.cfg.seed + 12345)
+            
+            self.cfg.obs_shape = self.train_env.observation_space.shape
+            self.cfg.action_shape = self.train_env.action_space.shape
         else:
             self.train_env = dmc.make(
                 self.cfg.task,
@@ -110,7 +119,7 @@ class Workspace:
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader, stats = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
+            self.rnd_dataloader, stats = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
             self.dataset_stats = stats
             
             # set reward max + min
@@ -134,7 +143,7 @@ class Workspace:
             self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.ae_dataloader = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs)
+            self.ae_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
 
         # RL agent dataloader
         if self.cfg.train_byol:
@@ -144,7 +153,7 @@ class Workspace:
                 self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                self.agent_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs)
+                self.agent_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
         
         # RL agent
         if self.cfg.learner == 'ddpg':
@@ -255,13 +264,15 @@ class Workspace:
             # eval when necessary (in the beginning as well)
             if epoch == 1 or eval_every(epoch):
                 # TODO write eval
-                pass
+                self.eval_agent(bc=True)
                 
-    def eval_agent_mujoco(self):
+    def eval_agent_mujoco(self, bc=False):
         '''Evaluates agent in MuJoCo envs.'''
         episode_rewards = []
         episode_count = 0
         episode_until = Until(self.cfg.num_eval_episodes)
+        
+        agent = self.bc if bc else self.agent
 
         while episode_until(episode_count):
             ob = self.eval_env.reset()
@@ -274,7 +285,7 @@ class Workspace:
                     state_std = self.dataset_stats[3]
                     ob = (ob - state_mean) / state_std
                 
-                action = self.agent._act(ob, self.global_step, eval_mode=True)
+                action = agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
 
                 n_ob, r, done, _ = self.eval_env.step(action)
@@ -298,11 +309,13 @@ class Workspace:
         else:
             print_dict(metrics)
 
-    def eval_agent_dmc(self):
+    def eval_agent_dmc(self, bc=False):
         '''Evaluates agent in DMC envs.'''
         episode_rewards = []
         episode_count = 0
         episode_until = Until(self.cfg.num_eval_episodes)
+        
+        agent = self.bc if bc else self.agent
 
         while episode_until(episode_count):
             time_step = self.eval_env.reset()
@@ -310,7 +323,7 @@ class Workspace:
             episode_reward = 0.0
             while not done:
                 ob = time_step.observation
-                action = self.agent._act(ob, self.global_step, eval_mode=True)
+                action = agent._act(ob, self.global_step, eval_mode=True)
                 action = np.asarray(action)
 
                 time_step = self.eval_env.step(action)
@@ -332,11 +345,11 @@ class Workspace:
         else:
             print_dict(metrics)
 
-    def eval_agent(self):
+    def eval_agent(self, bc=False):
         if self.cfg.task in MUJOCO_ENVS:
-            self.eval_agent_mujoco()
+            self.eval_agent_mujoco(bc)
         else:
-            self.eval_agent_dmc()
+            self.eval_agent_dmc(bc)
             
     def train_agent(self):
         '''Train offline RL agent.'''
@@ -476,9 +489,9 @@ def main(cfg):
     # actual training + sanity checking
     if cfg.wandb:
         with wandb.init(project=project_name, entity=entity, name=name) as run:
-            train()
+            workspace.train_ae()
     else:
-        train()
+        workspace.train_ae()
         
 if __name__ == '__main__':
     main()

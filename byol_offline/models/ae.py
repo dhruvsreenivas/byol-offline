@@ -103,7 +103,7 @@ class AETrainer:
         
         key = jax.random.PRNGKey(cfg.seed)
         init_key, state_key = jax.random.split(key)
-        params = ae.init(init_key, batched_zeros_like(cfg.obs_shape))
+        params = ae.init(init_key, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
         
         opt = optax.adam(learning_rate=cfg.lr)
         opt_state = opt.init(params)
@@ -137,7 +137,7 @@ class AETrainer:
                 )
                 kl = post_dist.kl_divergence(standard_gaussian)
                 kl = jnp.mean(kl)
-                loss = -(rec_loss - beta * kl)
+                loss = rec_loss + beta * kl # want to minimize KL and reconstruction loss
                 extras = {'rec_loss': rec_loss, 'kl': kl}
             
             return loss, extras

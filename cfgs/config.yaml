@@ -29,6 +29,7 @@ depth: 32
 
 # dataset args
 normalize_inputs: true
+normalize_state_only: true
 sample_batches: false
 
 # reward augmentations
@@ -118,6 +119,7 @@ rnd:
     repr_dim: 50
 
 ae:
+  task: ${task}
   seed: ${seed}
   hidden_dim: 256
   obs_shape: ${obs_shape}
@@ -125,6 +127,8 @@ ae:
   type: cond_ae
   
   feature_dim: 200
+  state_embed_dim: 16
+  action_embed_dim: 16
   beta: 0.5
   clip_log_std: true
   activate_final: true

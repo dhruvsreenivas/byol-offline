@@ -335,7 +335,7 @@ def d4rl_dict_to_tuple(dict_batch):
         batch.append(tf.cast(v, dtype=tf.float32))
     return tuple(batch)
 
-def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, normalize=True, prefetch=True):
+def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, normalize=True, state_only=True, prefetch=True):
     dataset = get_gym_dataset(dataset_name, dataset_capability)
     n_examples = get_dataset_size(dataset)
     
@@ -353,7 +353,10 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
             state_mean, action_mean, next_state_mean, state_scale, action_scale, next_state_scale, _ = stats
             
             normalized_state = (state - state_mean) / state_scale
-            normalized_action = (action - action_mean) / action_scale
+            if state_only:
+                normalized_action = action
+            else:
+                normalized_action = (action - action_mean) / action_scale
             normalized_next_state = (next_state - next_state_mean) / next_state_scale
             
             return normalized_state, normalized_action, reward, normalized_next_state, done

@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import haiku as hk
 from byol_offline.networks.network_utils import *
+from byol_offline.networks.encoder import AtariEncoder, DuelingMLP
 
 # ============================== DDPG ==============================
 
@@ -191,3 +192,16 @@ class BCActor(hk.Module):
         
         dist = distrax.Normal(mean, std)
         return dist
+    
+# ============================== DQN ==============================
+
+class DuelingDQN(hk.Module):
+    def __init__(self, action_dim):
+        super().__init__(name='dueling_dqn')
+        self.trunk = AtariEncoder()
+        self.mlp = DuelingMLP(action_dim)
+        
+    def __call__(self, x: jnp.ndarray):
+        z = self.trunk(x)
+        q = self.mlp(z)
+        return q

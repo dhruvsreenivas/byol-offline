@@ -1,4 +1,5 @@
 import gym
+from gym.wrappers.atari_preprocessing import AtariPreprocessing
 import d4rl
 import jax.numpy as jnp
 
@@ -12,7 +13,6 @@ class Until:
             return True
         until = self._until // self._action_repeat
         return step < until
-
 
 class Every:
     def __init__(self, every, action_repeat=1):
@@ -84,6 +84,14 @@ MUJOCO_ENVS = {
     'walker2d': 'Walker2d-v2'
 }
 
+ATARI_ENVS = {
+    'pong': 'PongNoFrameskip-v4',
+    'breakout': 'BreakoutNoFrameskip-v4',
+    'beamrider': 'BeamRiderNoFrameskip-v4',
+    'qbert': 'QbertNoFrameskip-v4',
+    'montezuma': 'MontezumaRevengeNoFrameskip-v4'
+}
+
 LEVELS = ['random', 'medium', 'expert', 'medium-replay', 'medium-expert']
 
 def make_gym_env(name, capability):
@@ -91,6 +99,14 @@ def make_gym_env(name, capability):
     env_name = name + '-' + capability + '-v2'
     return gym.make(env_name)
 
+def make_atari_env(name, grayscale=True):
+    assert name in ATARI_ENVS, "Not an Atari env!"
+    name = ATARI_ENVS[name]
+    env = gym.make(name)
+    # now need to apply atari wrapper there
+    env = AtariPreprocessing(env, grayscale_obs=grayscale)
+    return env
+    
 def get_gym_dataset(name, capability, q_learning=True):
     '''Gets dataset associated with env and level.'''
     assert capability in LEVELS, "Not a proper level -- can't load the dataset."

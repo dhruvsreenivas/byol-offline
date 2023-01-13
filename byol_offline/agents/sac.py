@@ -53,16 +53,16 @@ class SAC:
         critic_fn = lambda obs, action: SACCritic(cfg.hidden_dim)(obs, action)
         critic = hk.without_apply_rng(hk.transform(critic_fn))
 
-        # reward pessimism (currently using different encoder than the DrQv2 stuff--maybe have to change)
+        # pessimism (currently using different encoder than the DrQv2 stuff--maybe have to change)
         if cfg.aug == 'rnd':
             assert rnd is not None, "Can't use RND when model doesn't exist."
-            assert type(rnd) == RNDModelTrainer, "Not an RND model trainer--BAD!"
+            assert isinstance(rnd, RNDModelTrainer), "Not an RND model trainer--BAD!"
             def aug_fn(obs, acts):
                 # dummy step because we delete it anyway
                 return rnd.compute_uncertainty(obs, acts, 0)
         elif cfg.aug == 'byol':
             assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
-            assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
+            assert isinstance(byol, WorldModelTrainer), "Not a BYOL-Explore model trainer--BAD!"
             def aug_fn(obs, acts):
                 # dummy step again because we delete it
                 return byol.compute_uncertainty(obs, acts, 0)
@@ -126,7 +126,7 @@ class SAC:
         
         # =================== START OF ALL FNS ===================
         
-        def act(obs: jnp.ndarray, step: int, eval_mode: bool=False):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool = False):
             del step
             
             rng, key = jax.random.split(self.train_state.rng_key)
@@ -205,13 +205,13 @@ class SAC:
                              step: int):
             del step
             
+            # flatten transitions (BYOL loss is sequential)
+            transitions = flatten_data(transitions)
+            
             # get reward penalty
             reward_pen = get_aug(transitions.obs, transitions.actions) # detached already
             penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max)
             transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
-
-            # flatten transitions (BYOL loss is sequential)
-            transitions = flatten_data(transitions)
             
             # encode observations
             features = encoder.apply(encoder_params, transitions.obs)
