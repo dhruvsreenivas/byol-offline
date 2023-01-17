@@ -62,13 +62,32 @@ def normalize_rewards_d4rl(dataset):
 
     return dataset
 
+def clip_actions_d4rl(dataset, eps):
+    '''Clips actions in D4RL datasets, as in https://github.com/Div99/XQL/blob/main/offline/dataset_utils.py.'''
+    lim = 1 - eps
+    dataset['actions'] = np.clip(dataset['actions'], -lim, lim)
+    return dataset
+
+def relabel_dones_d4rl(dataset):
+    '''Relabels terminals in D4RL dataset, in the case where the next ob and ob differ by a lot.'''
+    dones_float = np.zeros_like(dataset['rewards'])
+    dones_float[-1] = 1
+    for i in range(len(dones_float) - 1):
+        if np.linalg.norm(dataset['observations'][i + 1] - dataset['next_observations'][i]) > 1e-6 or dataset['terminals'][i] == 1.0:
+            dones_float[i] = 1
+        else:
+            dones_float[i] = 0
+    
+    dataset['terminals'] = dones_float
+    return dataset
+
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
-    def __init__(self, data_dir, seq_len, normalize_reward=False):
+    def __init__(self, data_dir, seq_len, frame_stack=3):
         self._data_dir = data_dir
         self._seq_len = seq_len
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
-        self._normalize_reward = normalize_reward
+        self._frame_stack = frame_stack
         
         # filenames
         self._episode_fns = []
@@ -107,19 +126,54 @@ class VD4RLSequenceReplayBuffer:
                 continue
     
     def _sample(self):
+        # observations are (T, H, W, C * frame_stack)
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - self._seq_len)
-        obs = episode["image"][idx : idx + self._seq_len].astype(np.float32)
-        action = episode["action"][idx : idx + self._seq_len].astype(np.float32)
-        reward = episode["reward"][idx : idx + self._seq_len].astype(np.float32)
-        next_obs = episode["image"][idx + 1 : idx + self._seq_len + 1].astype(np.float32)
-        done = episode["is_terminal"][idx : idx + self._seq_len]
+        
+        obs = []
+        actions = []
+        rewards = []
+        next_obs = []
+        dones = []
+        for i in range(idx, idx + self._seq_len):
+            if i < self._frame_stack - 1:
+                repeat = self._frame_stack - i
+                first_frame = episode["image"][0]
+                other_frames = episode["image"][1:i]
+                ob = np.concatenate([first_frame] * repeat + [other_frames], axis=-1).astype(np.float32) # (H, W, C * frame_stack)
+            else:
+                ob = episode['image'][i - self._frame_stack + 1 : i + 1].astype(np.float32)
+            
+            if idx + 1 < self._frame_stack - 1:
+                repeat = self._frame_stack - (i + 1)
+                first_frame = episode['image'][0]
+                other_next_frames = episode['image'][1:i + 1]
+                next_ob = np.concatenate([first_frame] * repeat + [other_next_frames], axis=-1).astype(np.float32)
+            else:
+                next_ob = episode['image'][idx - self._frame_stack + 2 : idx + 2].astype(np.float32)
+            
+            obs.append(ob)
+            next_obs.append(next_ob)
+            
+            action = episode['action'][idx].astype(np.float32)
+            reward = episode['reward'][idx].astype(np.float32)
+            done = episode['is_terminal'][idx].astype(np.float32)
+            
+            actions.append(action)
+            rewards.append(reward)
+            dones.append(done)
+        
+        obs = np.stack(obs)
+        actions = np.stack(actions)
+        rewards = np.stack(rewards)
+        next_states = np.stack(next_states)
+        dones = np.stack(dones)
 
-        return obs, action, reward, next_obs, done
+        return obs, actions, rewards, next_obs, dones
     
 class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
-    def __init__(self, data_dir, frame_stack):
+    def __init__(self, data_dir, frame_stack=3):
         self._data_dir = data_dir
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
         self._frame_stack = frame_stack
@@ -164,16 +218,18 @@ class VD4RLTransitionReplayBuffer:
         episode = self._sample_episode()
         idx = np.random.randint(0, episode_len(episode) - 1)
         if idx < self._frame_stack - 1:
+            repeat = self._frame_stack - idx
             first_frame = episode['image'][0]
             curr_frame = episode['image'][idx]
-            obs = np.concatenate([first_frame] * 2 + [curr_frame], axis=-1).astype(np.float32)
+            obs = np.concatenate([first_frame] * repeat + [curr_frame], axis=-1).astype(np.float32)
         else:
             obs = episode['image'][idx - self._frame_stack + 1 : idx + 1].astype(np.float32)
             
         if idx + 1 < self._frame_stack - 1:
+            repeat = self._frame_stack - (idx + 1)
             first_frame = episode['image'][0]
             curr_next_frame = episode['image'][idx + 1]
-            next_obs = np.concatenate([first_frame] * 2 + [curr_next_frame], axis=-1).astype(np.float32)
+            next_obs = np.concatenate([first_frame] * repeat + [curr_next_frame], axis=-1).astype(np.float32)
         else:
             next_obs = episode['image'][idx - self._frame_stack + 2 : idx + 2].astype(np.float32)
         
@@ -184,10 +240,15 @@ class VD4RLTransitionReplayBuffer:
         return obs, action, reward, next_obs, done
     
 class D4RLSequenceReplayBuffer:
-    def __init__(self, env_name, capability, seq_len, normalize=True, normalize_reward=False):
+    def __init__(self, env_name, capability, seq_len, clip_actions=True, normalize=True, normalize_reward=False):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
         self.n_samples = self.dataset['observations'].shape[0]
         self._seq_len = seq_len
+        
+        if clip_actions:
+            assert not normalize, "don't clip when you are normalizing anyway."
+            eps = 1e-5
+            self.dataset = clip_actions_d4rl(self.dataset, eps)
 
         self.normalize = normalize
         if normalize:
