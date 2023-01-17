@@ -6,6 +6,7 @@ import dill
 from typing import Tuple, NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
+from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
@@ -31,8 +32,10 @@ class ConvLatentWorldModel(hk.Module):
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
         if cfg.dreamer:
+            self.decoder = DreamerDecoder(cfg.frame_stack * 3, cfg.depth)
             self.predictor = BYOLPredictor(4096)
         else:
+            self.decoder = DrQv2Decoder(cfg.frame_stack * 3)
             self.predictor = BYOLPredictor(20000)
         
     def __call__(self, obs, actions):

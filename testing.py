@@ -11,6 +11,8 @@ from pathlib import Path
 from tqdm import trange
 import wandb
 
+from byol_offline.networks.encoder import *
+from byol_offline.networks.decoder import *
 from byol_offline.models import *
 from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
@@ -18,6 +20,34 @@ from utils import get_gym_dataset, make_gym_env
 
 '''Various testing functions to make sure core machinery works.'''
 
+def test_encoding_decoding(dreamer=True):
+    shape = (64, 64, 9)
+    if dreamer:
+        enc_fn = lambda x: DreamerEncoder(32)(x)
+        dec_fn = lambda x: DreamerDecoder(shape[-1], 32)(x)
+    else:
+        enc_fn = lambda x: DrQv2Encoder()(x)
+        dec_fn = lambda x: DrQv2Decoder(shape[-1])(x)
+    
+    enc = hk.without_apply_rng(hk.transform(enc_fn))
+    dec = hk.without_apply_rng(hk.transform(dec_fn))
+    
+    key = jax.random.PRNGKey(42)
+    enc_key, dec_key, key = jax.random.split(key, 3)
+    enc_params = enc.init(enc_key, jnp.zeros((1,) + shape))
+    dec_params = dec.init(dec_key, jnp.zeros((1, 4096 if dreamer else 32768)))
+    
+    ob_key, rep_key = jax.random.split(key)
+    rand_inp = jax.random.normal(ob_key, shape=(10,) + shape)
+    rand_rep = jax.random.normal(rep_key, shape=(10, 4096 if dreamer else 32768))
+    
+    out = enc.apply(enc_params, rand_inp)
+    print(f'representation shape: {out.shape}') # should be rand rep shape
+    assert out.shape == rand_rep.shape
+    
+    out_rec = dec.apply(dec_params, rand_rep)
+    print(f'reconstruction shape: {out_rec.shape}')
+    
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model(cfg):
     # Make sure print statements are enabled in WM __call__ function to print out state when running this method
@@ -97,7 +127,7 @@ def batch_eq(batch1, batch2):
 def test_iterative_dataloading():
     name = 'hopper'
     capability = 'medium'
-    loader, _ = rnd_iterative_dataloader(name, capability, batch_size=1024, normalize=True)
+    loader, _ = d4rl_rnd_iterative_dataloader(name, capability, batch_size=1024, normalize=True)
     
     batches = []
     for epoch in range(2):
@@ -303,4 +333,4 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    test_bonus()
+    test_encoding_decoding(dreamer=False)

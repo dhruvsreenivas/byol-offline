@@ -119,7 +119,7 @@ class Workspace:
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader, stats = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+            self.rnd_dataloader, stats = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
             self.dataset_stats = stats
             
             # set reward max + min
@@ -143,7 +143,7 @@ class Workspace:
             self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.ae_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+            self.ae_dataloader, _ = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
 
         # RL agent dataloader
         if self.cfg.train_byol:
@@ -153,7 +153,7 @@ class Workspace:
                 self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                self.agent_dataloader, _ = rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+                self.agent_dataloader, _ = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
         
         # RL agent
         if self.cfg.learner == 'ddpg':

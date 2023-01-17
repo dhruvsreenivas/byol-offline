@@ -396,7 +396,7 @@ def d4rl_dict_to_tuple(dict_batch):
         batch.append(tf.cast(v, dtype=tf.float32))
     return tuple(batch)
 
-def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, normalize=True, state_only=True, prefetch=True):
+def d4rl_rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, normalize=True, state_only=True, prefetch=True):
     dataset = get_gym_dataset(dataset_name, dataset_capability)
     n_examples = get_dataset_size(dataset)
     
@@ -423,7 +423,7 @@ def rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, norma
             return normalized_state, normalized_action, reward, normalized_next_state, done
         dataset = dataset.map(normalize_map)
     
-    dataset = dataset.shuffle(buffer_size=n_examples, seed=0, reshuffle_each_iteration=True) # perfect shuffling
+    dataset = dataset.shuffle(buffer_size=n_examples, reshuffle_each_iteration=True) # perfect shuffling
     
     if prefetch:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
