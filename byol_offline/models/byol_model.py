@@ -52,10 +52,10 @@ class ConvLatentWorldModel(hk.Module):
         ])
         
         if cfg.dreamer:
-            self.decoder = DreamerDecoder(3 * cfg.frame_stack, cfg.depth)
+            self.decoder = DreamerDecoder(cfg.frame_stack * 3, cfg.depth)
             self.predictor = BYOLPredictor(4096)
         else:
-            self.decoder = DrQv2Decoder(3 * cfg.in_channel)
+            self.decoder = DrQv2Decoder(cfg.frame_stack * 3)
             self.predictor = BYOLPredictor(20000)
         
     def __call__(self, obs, actions):
