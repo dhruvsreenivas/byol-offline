@@ -2,10 +2,12 @@ import jax
 import jax.numpy as jnp
 import haiku as hk
 import optax
+import distrax
 import dill
 from typing import Tuple, NamedTuple
 
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
+from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
@@ -30,9 +32,30 @@ class ConvLatentWorldModel(hk.Module):
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
+        # prior + post mlps
+        self.discrete = cfg.discrete
+        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if cfg.discrete else 2 * cfg.stoch_dim
+        self.prior_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(dist_dim)
+        ])
+        self.post_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(dist_dim)
+        ])
+        self.reward_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(1)
+        ])
+        
         if cfg.dreamer:
+            self.decoder = DreamerDecoder(3 * cfg.frame_stack, cfg.depth)
             self.predictor = BYOLPredictor(4096)
         else:
+            self.decoder = DrQv2Decoder(3 * cfg.in_channel)
             self.predictor = BYOLPredictor(20000)
         
     def __call__(self, obs, actions):
@@ -42,23 +65,37 @@ class ConvLatentWorldModel(hk.Module):
         embeddings = hk.BatchApply(self.encoder)(obs)
         state = self.closed_gru.initial_state(B)
         
-        embedding, action = embeddings[0], actions[0]
-        state, _ = self.closed_gru(embedding, action, state)
+        embedding, action = embeddings[0], actions[0] # x_0, a_0
+        state, _ = self.closed_gru(embedding, action, state) # h_0
         latent = self.predictor(state)
         latent = jnp.expand_dims(latent, 0)
         
-        states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state)
+        # collect h_t, latents
+        states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state) # [h_t]
         latents = hk.BatchApply(self.predictor)(states)
         
+        # === dreamer stuff ===
+        # img prediction
+        states = jnp.concatenate([state, states]) # all deter states, shape (T, B, deter_dim)
+        embeddings = jnp.concatenate([embedding, embeddings]) # (T, B, embed_dim)
+        hz = jnp.concatenate([states, embeddings], axis=-1) # (T, B, deter_dim + embed_dim)
+        mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
+        
+        # post + prior
+        post_stats = hk.BatchApply(self.post_mlp)(hz) # (T, B, dist_dim)
+        prior_stats = hk.BatchApply(self.prior_mlp)(states) # (T, B, dist_dim)
+        
+        # === byol stuff ===
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
-        return pred_latents, embeddings
+        
+        # return
+        dreamer_extras = (mean, post_stats, prior_stats)
+        return pred_latents, embeddings, dreamer_extras
 
 class MLPLatentWorldModel(hk.Module):
     '''Latent world model for D4RL tasks. Primarily inspired by MOPO repository.'''
     def __init__(self, cfg):
         super().__init__()
-        self._reconstruct = cfg.reconstruct
-        self._learn_reward = cfg.learn_reward
         
         # nets
         self.encoder = hk.nets.MLP(
@@ -69,16 +106,29 @@ class MLPLatentWorldModel(hk.Module):
         self.closed_gru = ClosedLoopGRU(cfg.gru_hidden_size)
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
-        # decoding in general
-        if self._reconstruct:
-            self.decoder = hk.nets.MLP(
-                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.obs_shape[0]],
-                activation=jax.nn.swish
-            )
+        # prior + post mlps
+        self.discrete = cfg.discrete
+        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if cfg.discrete else 2 * cfg.stoch_dim
+        self.prior_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(dist_dim)
+        ])
+        self.post_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(dist_dim)
+        ])
+        self.reward_mlp = hk.Sequential([
+            hk.Linear(cfg.hidden_dim),
+            jax.nn.elu,
+            hk.Linear(1)
+        ])
         
-        if self._learn_reward:
-            self.reward_head = hk.Linear(1)
-        
+        self.decoder = hk.nets.MLP(
+            [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.obs_shape[0]],
+            activation=jax.nn.swish
+        )
         self.predictor = BYOLPredictor(cfg.repr_dim)
     
     def __call__(self, obs, actions):
@@ -96,23 +146,23 @@ class MLPLatentWorldModel(hk.Module):
         states, _ = hk.dynamic_unroll(self.open_gru, actions[1:], initial_state=state)
         latents = hk.BatchApply(self.predictor)(states)
         
-        pred_latents = jnp.concatenate([latent, latents])
+        # === dreamer stuff ===
+        # img prediction
+        states = jnp.concatenate([state, states]) # all deter states, shape (T, B, deter_dim)
+        embeddings = jnp.concatenate([embedding, embeddings]) # (T, B, embed_dim)
+        hz = jnp.concatenate([states, embeddings], axis=-1) # (T, B, deter_dim + embed_dim)
+        mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
         
-        # if reconstructing, add reward, state preds (TODO: make distribution based or pure state based?)
-        all_states = jnp.concatenate([jnp.expand_dims(state, 0), states], axis=0)
-        hz = jnp.concatenate([all_states, embeddings], axis=-1)
-        if self._reconstruct:
-            img_preds = self.decoder(hz)
-        if self._learn_reward:
-            reward_preds = self.reward_head(hz)
+        # post + prior
+        post_stats = hk.BatchApply(self.post_mlp)(hz) # (T, B, dist_dim)
+        prior_stats = hk.BatchApply(self.prior_mlp)(states) # (T, B, dist_dim)
         
-        extras = []
-        if self._reconstruct:
-            extras.append(img_preds)
-        if self._learn_reward:
-            extras.append(reward_preds)
+        # === byol stuff ===
+        pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
         
-        return pred_latents, embeddings, extras
+        # return
+        dreamer_extras = (mean, post_stats, prior_stats)
+        return pred_latents, embeddings, dreamer_extras
     
 class WorldModelTrainer:
     '''World model trainer.'''
@@ -158,7 +208,28 @@ class WorldModelTrainer:
             wm_opt_state=wm_opt_state
         )
         
-        self.ema = cfg.ema
+        ema = cfg.ema
+        discrete = cfg.discrete
+        beta = cfg.beta # trades off Dreamer loss and BYOL loss
+        
+        @jax.jit
+        def get_latent_dist(stats: jnp.ndarray) -> distrax.Distribution:
+            if discrete:
+                stats = stats.reshape(stats.shape[:-1] + (cfg.stoch_dim, cfg.stoch_discrete_dim))
+                dist = distrax.OneHotCategorical(logits=stats)
+                dist = distrax.straight_through_wrapper(dist)
+            else:
+                mean, std = jnp.split(stats, 2, -1)
+                std = jax.nn.softplus(std) + 0.1
+                dist = distrax.Normal(mean, std)
+            
+            return distrax.Independent(dist, 1)
+        
+        @jax.jit
+        def get_img_dist(mean: jnp.ndarray) -> distrax.Distribution:
+            dist = distrax.Normal(mean, 1.0)
+            dist = distrax.Independent(dist, 3)
+            return dist
     
         # define loss functions + update functions
         @jax.jit
@@ -175,7 +246,7 @@ class WorldModelTrainer:
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
             
-            pred_latents, _, _ = wm.apply(wm_params, obs_window, action_window)
+            pred_latents, _, dreamer_extras = wm.apply(wm_params, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
             _, target_latents, _ = wm.apply(target_params, obs_window, action_window) # (T, B, embed_dim)
@@ -190,8 +261,19 @@ class WorldModelTrainer:
             mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
             mses = sliding_window(mses, 0, window_size) # zeros out losses we don't care about (i.e. past window size)
             mses = jnp.roll(mses, shift=starting_idx, axis=0)
-            loss_vec = jnp.sum(mses, -1) # (T, B)
-            return jnp.mean(loss_vec), loss_vec
+            byol_loss_vec = jnp.sum(mses, -1) # (T, B)
+            
+            # get dreamer losses and ONLY add to loss vec, not second term (i.e. leave exploration term alone as second term)
+            mean, post_stats, prior_stats = dreamer_extras
+            img_dist = get_img_dist(mean)
+            rec_loss = -img_dist.log_prob(obs_seq).mean()
+            
+            post_dist = get_latent_dist(post_stats)
+            prior_dist = get_latent_dist(prior_stats)
+            kl = post_dist.kl_divergence(prior_dist).mean()
+            
+            total_loss = jnp.mean(byol_loss_vec) + beta * (kl + rec_loss)
+            return total_loss, byol_loss_vec
         
         @jax.jit
         def wm_loss_fn(wm_params: hk.Params,
@@ -226,7 +308,7 @@ class WorldModelTrainer:
             update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
             
-            new_target_params = target_update_fn(new_params, train_state.target_params, self.ema)
+            new_target_params = target_update_fn(new_params, train_state.target_params, ema)
             
             metrics = {
                 'wm_loss': loss

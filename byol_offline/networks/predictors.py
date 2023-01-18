@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import haiku as hk
 
 class BYOLPredictor(hk.Module):
+    '''BYOL predictor.'''
     def __init__(self, repr_dim):
         super().__init__()
         self.repr_dim = repr_dim
@@ -15,6 +16,7 @@ class BYOLPredictor(hk.Module):
         return out
     
 class RNDPredictor(hk.Module):
+    '''RND predictor.'''
     def __init__(self, cfg):
         super().__init__()
         weight_init = hk.initializers.UniformScaling(0.333)
