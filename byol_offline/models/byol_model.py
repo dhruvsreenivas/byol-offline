@@ -33,8 +33,8 @@ class ConvLatentWorldModel(hk.Module):
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
         # prior + post mlps
-        self.discrete = cfg.discrete
-        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if cfg.discrete else 2 * cfg.stoch_dim
+        self.discrete = cfg.stoch_discrete_dim > 1
+        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if self.discrete else 2 * cfg.stoch_dim
         self.prior_mlp = hk.Sequential([
             hk.Linear(cfg.hidden_dim),
             jax.nn.elu,
@@ -79,17 +79,18 @@ class ConvLatentWorldModel(hk.Module):
         states = jnp.concatenate([state, states]) # all deter states, shape (T, B, deter_dim)
         embeddings = jnp.concatenate([embedding, embeddings]) # (T, B, embed_dim)
         hz = jnp.concatenate([states, embeddings], axis=-1) # (T, B, deter_dim + embed_dim)
-        mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
+        img_mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
         
-        # post + prior
+        # post + prior & reward
         post_stats = hk.BatchApply(self.post_mlp)(hz) # (T, B, dist_dim)
         prior_stats = hk.BatchApply(self.prior_mlp)(states) # (T, B, dist_dim)
+        reward_mean = hk.BatchApply(self.reward_mlp)(hz) # (T, B, 1)
         
         # === byol stuff ===
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
         
         # return
-        dreamer_extras = (mean, post_stats, prior_stats)
+        dreamer_extras = (img_mean, reward_mean, post_stats, prior_stats)
         return pred_latents, embeddings, dreamer_extras
 
 class MLPLatentWorldModel(hk.Module):
@@ -107,8 +108,8 @@ class MLPLatentWorldModel(hk.Module):
         self.open_gru = hk.GRU(cfg.gru_hidden_size)
         
         # prior + post mlps
-        self.discrete = cfg.discrete
-        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if cfg.discrete else 2 * cfg.stoch_dim
+        self.discrete = cfg.stoch_discrete_dim > 1
+        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if self.discrete else 2 * cfg.stoch_dim
         self.prior_mlp = hk.Sequential([
             hk.Linear(cfg.hidden_dim),
             jax.nn.elu,
@@ -151,17 +152,18 @@ class MLPLatentWorldModel(hk.Module):
         states = jnp.concatenate([state, states]) # all deter states, shape (T, B, deter_dim)
         embeddings = jnp.concatenate([embedding, embeddings]) # (T, B, embed_dim)
         hz = jnp.concatenate([states, embeddings], axis=-1) # (T, B, deter_dim + embed_dim)
-        mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
+        state_mean = hk.BatchApply(self.decoder)(hz) # (T, B, H, W, C)
         
-        # post + prior
+        # post + prior & rewards
         post_stats = hk.BatchApply(self.post_mlp)(hz) # (T, B, dist_dim)
         prior_stats = hk.BatchApply(self.prior_mlp)(states) # (T, B, dist_dim)
+        reward_mean = hk.BatchApply(self.reward_mlp)(hz)
         
         # === byol stuff ===
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeddings
         
         # return
-        dreamer_extras = (mean, post_stats, prior_stats)
+        dreamer_extras = (state_mean, reward_mean, post_stats, prior_stats)
         return pred_latents, embeddings, dreamer_extras
     
 class WorldModelTrainer:
@@ -209,7 +211,7 @@ class WorldModelTrainer:
         )
         
         ema = cfg.ema
-        discrete = cfg.discrete
+        discrete = cfg.stoch_discrete_dim > 1
         beta = cfg.beta # trades off Dreamer loss and BYOL loss
         
         @jax.jit
@@ -226,9 +228,9 @@ class WorldModelTrainer:
             return distrax.Independent(dist, 1)
         
         @jax.jit
-        def get_img_dist(mean: jnp.ndarray) -> distrax.Distribution:
+        def get_img_or_reward_dist(mean: jnp.ndarray, img=False) -> distrax.Distribution:
             dist = distrax.Normal(mean, 1.0)
-            dist = distrax.Independent(dist, 3)
+            dist = distrax.Independent(dist, 3 if img else 1)
             return dist
     
         # define loss functions + update functions
@@ -237,6 +239,7 @@ class WorldModelTrainer:
                                    target_params: hk.Params,
                                    obs_seq: jnp.ndarray,
                                    action_seq: jnp.ndarray,
+                                   reward_seq: jnp.ndarray,
                                    window_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
             
             T, B = obs_seq.shape[:2]
@@ -245,6 +248,7 @@ class WorldModelTrainer:
             starting_idx = T - window_size
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
+            reward_window = sliding_window(reward_seq, starting_idx, window_size) # (T, B, 1) I think
             
             pred_latents, _, dreamer_extras = wm.apply(wm_params, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
@@ -264,9 +268,10 @@ class WorldModelTrainer:
             byol_loss_vec = jnp.sum(mses, -1) # (T, B)
             
             # get dreamer losses and ONLY add to loss vec, not second term (i.e. leave exploration term alone as second term)
-            mean, post_stats, prior_stats = dreamer_extras
-            img_dist = get_img_dist(mean)
-            rec_loss = -img_dist.log_prob(obs_seq).mean()
+            img_mean, reward_mean, post_stats, prior_stats = dreamer_extras
+            img_dist = get_img_or_reward_dist(img_mean, img=True)
+            reward_dist = get_img_or_reward_dist(reward_mean, img=False)
+            rec_loss = -img_dist.log_prob(obs_window).mean() - reward_dist.log_prob(reward_window).mean()
             
             post_dist = get_latent_dist(post_stats)
             prior_dist = get_latent_dist(prior_stats)
@@ -279,13 +284,14 @@ class WorldModelTrainer:
         def wm_loss_fn(wm_params: hk.Params,
                        target_params: hk.Params,
                        obs_seq: jnp.ndarray,
-                       action_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                       action_seq: jnp.ndarray,
+                       reward_seq: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
             
             T, B = obs_seq.shape[:2]
 
             def ws_body_fn(ws, curr_state):
                 curr_loss, curr_loss_window = curr_state
-                loss, loss_window = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, ws)
+                loss, loss_window = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, reward_seq, ws)
                 return curr_loss + loss, curr_loss_window + loss_window
             
             init_state = (0.0, jnp.zeros((T, B)))
@@ -295,11 +301,12 @@ class WorldModelTrainer:
         def update(train_state: BYOLTrainState,
                    obs: jnp.ndarray,
                    actions: jnp.ndarray,
+                   rewards: jnp.ndarray,
                    step: int):
             del step
             
             loss_grad_fn = jax.value_and_grad(wm_loss_fn, has_aux=True)
-            (loss, _), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions)
+            (loss, _), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards)
             
             if cfg.pmap:
                 loss = jax.lax.pmean(loss, axis_name='device') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
@@ -319,16 +326,18 @@ class WorldModelTrainer:
         
         def compute_uncertainty(obs_seq: jnp.ndarray,
                                 action_seq: jnp.ndarray,
+                                reward_seq: jnp.ndarray,
                                 step: int):
             '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
             
             :param obs_seq: Sequence of observations, of shape (seq_len, B, obs_dim)
             :param action_seq: Sequence of actions, of shape (seq_len, B, action_dim)
+            :param reward_seq: Sequence of rewards, of shape (seq_len, B, 1)
             
             :return uncertainties: Model uncertainties, of shape (seq_len, B).
             '''
             del step
-            _, losses = wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
+            _, losses, _ = wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
             # losses are of shape (T, B), result of loss accumulation
             return jax.lax.stop_gradient(losses)
         

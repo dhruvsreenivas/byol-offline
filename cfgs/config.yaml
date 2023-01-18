@@ -76,8 +76,10 @@ byol:
   lr: 1e-3
   ema: 0.99
   pmap: ${pmap}
-  reconstruct: false
-  learn_reward: false
+
+  # dreamer args
+  stoch_dim: 32
+  discrete: 32
 
   vd4rl:
     obs_shape: ${obs_shape}
@@ -85,8 +87,9 @@ byol:
     dreamer: ${dreamer}
     depth: ${depth}
     gru_hidden_size: 256
-    reconstruct: ${byol.reconstruct}
-    learn_reward: ${byol.learn_reward}
+    stoch_dim: ${byol.stoch_dim}
+    discrete: ${byol.discrete}
+
   
   d4rl:
     obs_shape: ${obs_shape}
@@ -94,8 +97,6 @@ byol:
     hidden_dim: 512
     repr_dim: 128
     gru_hidden_size: 64
-    reconstruct: ${byol.reconstruct}
-    learn_reward: ${byol.learn_reward}
 
 rnd:
   task: ${task}
