@@ -233,6 +233,7 @@ class Workspace:
                 
     def train_rnd(self):
         '''Train RND model offline.'''
+        save_every = Every(self.cfg.model_save_every)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
@@ -249,7 +250,7 @@ class Workspace:
             else:
                 print_dict(log_dump)
             
-            if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
+            if self.cfg.save_model and save_every(epoch):
                 model_path = self.pretrained_rnd_dir / f'rnd_{epoch}.pkl'
                 self.rnd_trainer.save(model_path)
                 

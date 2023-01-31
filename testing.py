@@ -17,7 +17,7 @@ from byol_offline.networks.rnn import *
 from byol_offline.models import *
 from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
-from utils import get_gym_dataset, make_gym_env
+from utils import get_gym_dataset, make_gym_env, print_dict
 
 '''Various testing functions to make sure core machinery works.'''
 
@@ -109,9 +109,8 @@ def test_world_model_update(cfg):
     rand_rew = jax.random.normal(rew_key, (20, 10))
     print('=' * 20 + ' created rand inputs ' + '=' * 20)
     
-    new_state, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
-    for k, v in metrics.items():
-        print(f'{k}: {v}')
+    _, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
+    print_dict(metrics)
 
 def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
