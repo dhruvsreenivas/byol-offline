@@ -6,7 +6,7 @@ defaults:
 project_name: ???
 seed: 0
 level: med_exp
-train_byol: true
+train_byol: false
 
 # environment parameters
 img_size: 64
@@ -24,7 +24,7 @@ max_steps: 1000000 # to be on par with D4RL
 # general args (world model + policies + everything else)
 feature_dim: 200
 hidden_dim: 128
-dreamer: false
+dreamer: true
 depth: 32
 
 # dataset args
@@ -73,23 +73,25 @@ byol:
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
   optim: adam
-  lr: 1e-3
+  lr: 1e-4
   ema: 0.99
   pmap: ${pmap}
 
   # dreamer args
   stoch_dim: 32
-  discrete: 32
+  stoch_discrete_dim: 32
+  beta: 0.5
 
   vd4rl:
     obs_shape: ${obs_shape}
     seq_len: ${seq_len}
     dreamer: ${dreamer}
+    use_ln: true
     depth: ${depth}
-    gru_hidden_size: 256
+    gru_hidden_size: 200
+    hidden_dim: 200
     stoch_dim: ${byol.stoch_dim}
-    discrete: ${byol.discrete}
-
+    stoch_discrete_dim: ${byol.stoch_discrete_dim}
   
   d4rl:
     obs_shape: ${obs_shape}
@@ -97,6 +99,7 @@ byol:
     hidden_dim: 512
     repr_dim: 128
     gru_hidden_size: 64
+    stoch_discrete_dim: ${byol.stoch_discrete_dim}
 
 rnd:
   task: ${task}

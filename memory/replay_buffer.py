@@ -107,6 +107,7 @@ class VD4RLSequenceReplayBuffer:
         try:
             episode = load_episode(eps_fn, self._data_keys)
         except Exception:
+            print('could not load episode!')
             return False
         
         self._episode_fns.append(eps_fn)
@@ -136,28 +137,32 @@ class VD4RLSequenceReplayBuffer:
         next_obs = []
         dones = []
         for i in range(idx, idx + self._seq_len):
+            # current obs
             if i < self._frame_stack - 1:
                 repeat = self._frame_stack - i
                 first_frame = episode["image"][0]
-                other_frames = episode["image"][1:i]
-                ob = np.concatenate([first_frame] * repeat + [other_frames], axis=-1).astype(np.float32) # (H, W, C * frame_stack)
+                other_frames = [episode['image'][j] for j in range(1, i+1)] # i frames exactly
+                ob = np.concatenate([first_frame] * repeat + other_frames, axis=-1).astype(np.float32) # (H, W, C * frame_stack)
             else:
-                ob = episode['image'][i - self._frame_stack + 1 : i + 1].astype(np.float32)
+                ob = [episode["image"][i - x] for x in reversed(range(self._frame_stack))]
+                ob = np.concatenate(ob, -1).astype(np.float32)
             
-            if idx + 1 < self._frame_stack - 1:
+            # current next obs
+            if i + 1 < self._frame_stack - 1:
                 repeat = self._frame_stack - (i + 1)
                 first_frame = episode['image'][0]
-                other_next_frames = episode['image'][1:i + 1]
-                next_ob = np.concatenate([first_frame] * repeat + [other_next_frames], axis=-1).astype(np.float32)
+                other_next_frames = [episode['image'][j] for j in range(1, i+2)] # i + 1 frames exactly
+                next_ob = np.concatenate([first_frame] * repeat + other_next_frames, axis=-1).astype(np.float32)
             else:
-                next_ob = episode['image'][idx - self._frame_stack + 2 : idx + 2].astype(np.float32)
+                next_ob = [episode["image"][i - x + 1] for x in reversed(range(self._frame_stack))]
+                next_ob = np.concatenate(next_ob, -1).astype(np.float32)
             
             obs.append(ob)
             next_obs.append(next_ob)
             
-            action = episode['action'][idx].astype(np.float32)
-            reward = episode['reward'][idx].astype(np.float32)
-            done = episode['is_terminal'][idx].astype(np.float32)
+            action = episode['action'][i].astype(np.float32)
+            reward = episode['reward'][i].astype(np.float32)
+            done = episode['is_terminal'][i].astype(np.float32)
             
             actions.append(action)
             rewards.append(reward)
@@ -166,7 +171,7 @@ class VD4RLSequenceReplayBuffer:
         obs = np.stack(obs)
         actions = np.stack(actions)
         rewards = np.stack(rewards)
-        next_states = np.stack(next_states)
+        next_obs = np.stack(next_obs)
         dones = np.stack(dones)
 
         return obs, actions, rewards, next_obs, dones
@@ -368,6 +373,7 @@ def rnd_sampling_dataloader(buffer: Union[VD4RLTransitionReplayBuffer, D4RLTrans
                             max_steps: int,
                             batch_size: int,
                             prefetch: bool = True):
+    
     obs, action, reward, next_obs, done = buffer._sample()
     done = np.float32(done)
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype

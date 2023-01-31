@@ -9,19 +9,19 @@ class DrQv2Decoder(hk.Module):
         super().__init__()
         
         self.convnet = hk.Sequential([
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2DTranspose(in_channel, kernel_shape=3, stride=2, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(in_channel, kernel_shape=3, stride=2, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
         ])
     
     def __call__(self, x):
-        out_dim = 32 * 32 * 32
+        out_dim = 20000
         x = hk.Linear(out_dim)(x)
-        x = jnp.reshape(x, (-1, 32, 32, 32))
+        x = jnp.reshape(x, (-1, 25, 25, 32))
         return self.convnet(x)
     
 class DreamerDecoder(hk.Module):
@@ -31,18 +31,19 @@ class DreamerDecoder(hk.Module):
         self._depth = depth
         
         self.convnet = hk.Sequential([
-            hk.Conv2DTranspose(depth * 4, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(depth * 4, kernel_shape=5, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
             jax.nn.elu,
-            hk.Conv2DTranspose(depth * 2, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(depth * 2, kernel_shape=5, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
             jax.nn.elu,
-            hk.Conv2DTranspose(depth, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(depth, kernel_shape=6, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
             jax.nn.elu,
-            hk.Conv2DTranspose(in_channel, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(in_channel, kernel_shape=6, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
         ])
         
     def __call__(self, x):
-        out_dim = 4 * 4 * self._depth * 8
+        # (B, feature_dim)
+        out_dim = 32 * self._depth
         x = hk.Linear(out_dim)(x)
-        x = jnp.reshape(x, (-1, 4, 4, self._depth * 8))
+        x = jnp.reshape(x, (x.shape[0], 1, 1, out_dim))
         mean = self.convnet(x)
         return mean

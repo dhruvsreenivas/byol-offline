@@ -13,6 +13,7 @@ import wandb
 
 from byol_offline.networks.encoder import *
 from byol_offline.networks.decoder import *
+from byol_offline.networks.rnn import *
 from byol_offline.models import *
 from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
@@ -35,11 +36,11 @@ def test_encoding_decoding(dreamer=True):
     key = jax.random.PRNGKey(42)
     enc_key, dec_key, key = jax.random.split(key, 3)
     enc_params = enc.init(enc_key, jnp.zeros((1,) + shape))
-    dec_params = dec.init(dec_key, jnp.zeros((1, 4096 if dreamer else 32768)))
+    dec_params = dec.init(dec_key, jnp.zeros((1, 1024 if dreamer else 20000)))
     
     ob_key, rep_key = jax.random.split(key)
     rand_inp = jax.random.normal(ob_key, shape=(10,) + shape)
-    rand_rep = jax.random.normal(rep_key, shape=(10, 4096 if dreamer else 32768))
+    rand_rep = jax.random.normal(rep_key, shape=(10, 1024 if dreamer else 20000))
     
     out = enc.apply(enc_params, rand_inp)
     print(f'representation shape: {out.shape}') # should be rand rep shape
@@ -49,31 +50,47 @@ def test_encoding_decoding(dreamer=True):
     print(f'reconstruction shape: {out_rec.shape}')
     
 @hydra.main(config_path='cfgs', config_name='config')
-def test_world_model(cfg):
+def test_rssm(cfg):
+    rssm_fn = lambda e, a, s: RSSM(cfg.byol.vd4rl)(e, a, s) # don't think I need to multitransform yet, this is saved for WM
+    rssm = hk.transform(rssm_fn)
+    
+    key = jax.random.PRNGKey(42)
+    embed_key, action_key, state_key, init_key, apply_key = jax.random.split(key, 5)
+    rand_embeds = jax.random.normal(embed_key, shape=(20, 10, 100))
+    rand_actions = jax.random.normal(action_key, shape=(20, 10, 6))
+    rand_state = jax.random.normal(state_key, shape=(10, 2048)) # 32 * 32 + 1024, don't have to change the config then, no need for timestep dim
+    
+    params = rssm.init(init_key, rand_embeds, rand_actions, rand_state)
+    priors, posts, features = rssm.apply(params, apply_key, rand_embeds, rand_actions, rand_state)
+    print(priors.shape)
+    print(posts.shape)
+    print(features.shape)
+    
+@hydra.main(config_path='cfgs', config_name='config')
+def test_world_model_module(cfg):
     # Make sure print statements are enabled in WM __call__ function to print out state when running this method
     key = jax.random.PRNGKey(42)
-    init_key, key1, key2 = jax.random.split(key, 3)
+    init_key, apply_key, key1, key2 = jax.random.split(key, 4)
+    
+    cfg.obs_shape = (64, 64, 9)
+    cfg.action_shape = (6,)
 
     # dummy input creation
-    dummy_obs = jax.random.normal(key1, shape=(20, 10, 111))
-    dummy_actions = jax.random.normal(key2, shape=(20, 10, 7))
+    dummy_obs = jax.random.normal(key1, shape=(20, 10, 64, 64, 9))
+    dummy_actions = jax.random.normal(key2, shape=(20, 10, 6))
     
     # world model creation
-    wm_fn = lambda o, a: MLPLatentWorldModel(cfg.byol.d4rl)(o, a)
-    wm = hk.without_apply_rng(hk.transform(wm_fn))
+    wm_fn = lambda o, a: ConvLatentWorldModel(cfg.byol.vd4rl)(o, a)
+    wm = hk.transform(wm_fn)
     params = wm.init(init_key, dummy_obs, dummy_actions)
 
-    # sliding window mask
-    mask = jnp.arange(20)
-    mask = jnp.expand_dims(mask, axis=range(1, jnp.ndim(dummy_obs))) # (20, 1, 1), can use same mask for dummy action
-    mask = jnp.logical_or(mask < 7, mask >= 7 + 8)
-
-    obs = jnp.where(mask, 0, dummy_obs)
-    actions = jnp.where(mask, 0, dummy_actions)
-    obs = jnp.roll(obs, -7)
-    actions = jnp.roll(actions, -7)
-
-    _ = wm.apply(params, obs, actions)
+    pred_latents, embeds, extras = wm.apply(params, apply_key, dummy_obs, dummy_actions)
+    # initial checks
+    print('=== shape checks ===')
+    print(pred_latents.shape)
+    print(embeds.shape)
+    for e in extras:
+        print(e.shape)
 
 def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
@@ -85,7 +102,7 @@ def test_sampler_dataloading(d4rl=True, byol=True):
             buffer = D4RLTransitionReplayBuffer('hopper', 'medium')
             dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     else:
-        data_path = Path('./offline_data/cheetah_run/med_exp')
+        data_path = Path('./offline_data/dmc/cheetah_run/med_exp')
         if byol:
             buffer = VD4RLSequenceReplayBuffer(data_path, 25)
             dataloader = byol_sampling_dataloader(buffer, max_steps=200, batch_size=20)
@@ -333,4 +350,4 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    test_encoding_decoding(dreamer=False)
+    test_sampler_dataloading(d4rl=False, byol=True)

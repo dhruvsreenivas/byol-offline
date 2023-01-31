@@ -57,6 +57,7 @@ class Workspace:
             self.cfg.obs_shape = self.train_env.observation_space.shape
             self.cfg.action_shape = self.train_env.action_space.shape
             self.cfg.max_action = float(self.train_env.action_space.high[0])
+            
         elif self.cfg.task in ATARI_ENVS:
             self.train_env = make_atari_env(self.cfg.task, grayscale=self.cfg.grayscale_obs)
             self.eval_env = make_atari_env(self.cfg.task, grayscale=self.cfg.grayscale_obs)
@@ -64,6 +65,7 @@ class Workspace:
             
             self.cfg.obs_shape = self.train_env.observation_space.shape
             self.cfg.action_shape = self.train_env.action_space.shape
+            
         else:
             self.train_env = dmc.make(
                 self.cfg.task,
@@ -79,8 +81,7 @@ class Workspace:
                 self.cfg.seed,
                 self.cfg.img_size
             )
-            obs_spec = self.train_env.observation_spec()
-            self.cfg.obs_shape = (obs_spec[0] * self.cfg.frame_stack, ) + obs_spec[1:]
+            self.cfg.obs_shape = self.train_env.observation_spec().shape
             self.cfg.action_shape = self.train_env.action_spec().shape
         
         # RND model stuff
@@ -101,7 +102,12 @@ class Workspace:
                 rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                rnd_buffer = D4RLTransitionReplayBuffer(self.cfg.task, lvl, normalize=self.cfg.normalize_inputs, normalize_reward=self.cfg.normalize_inputs)
+                rnd_buffer = D4RLTransitionReplayBuffer(
+                    self.cfg.task,
+                    lvl,
+                    normalize=self.cfg.normalize_inputs,
+                    normalize_reward=self.cfg.normalize_inputs
+                )
                 if self.cfg.normalize_inputs:
                     self.dataset_stats = (
                         rnd_buffer.state_mean,
@@ -115,11 +121,21 @@ class Workspace:
                     self.cfg.reward_min = float(rnd_buffer.reward_min)
                     self.cfg.reward_max = float(rnd_buffer.reward_max)
             
-            self.rnd_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+            self.rnd_dataloader = rnd_sampling_dataloader(
+                rnd_buffer,
+                self.cfg.max_steps,
+                self.cfg.model_batch_size
+            )
         else:
             assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader, stats = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+            self.rnd_dataloader, stats = d4rl_rnd_iterative_dataloader(
+                self.cfg.task,
+                lvl,
+                self.cfg.model_batch_size,
+                normalize=self.cfg.normalize_inputs,
+                state_only=self.cfg.normalize_state_only
+            )
             self.dataset_stats = stats
             
             # set reward max + min
@@ -131,19 +147,31 @@ class Workspace:
             byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            byol_buffer = D4RLSequenceReplayBuffer(self.cfg.task, lvl, self.cfg.seq_len, normalize=self.cfg.normalize_inputs, normalize_reward=self.cfg.normalize_inputs)
+            byol_buffer = D4RLSequenceReplayBuffer(
+                self.cfg.task,
+                lvl,
+                self.cfg.seq_len,
+                normalize=self.cfg.normalize_inputs,
+                normalize_reward=self.cfg.normalize_inputs
+            )
             # already got stats by this point so we're good
             
         self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
-        # TODO make BYOL dataloader iterative if needed
         
-        # VAE model + dataloader
-        self.ae_trainer = AETrainer(self.cfg.ae)
-        if self.cfg.sample_batches:
-            self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
-        else:
-            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.ae_dataloader, _ = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.model_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+        # VAE model + dataloader (only for mujoco envs)
+        if self.cfg.task in MUJOCO_ENVS:
+            self.ae_trainer = AETrainer(self.cfg.ae)
+            if self.cfg.sample_batches:
+                self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+            else:
+                lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+                self.ae_dataloader, _ = d4rl_rnd_iterative_dataloader(
+                    self.cfg.task,
+                    lvl,
+                    self.cfg.model_batch_size,
+                    normalize=self.cfg.normalize_inputs,
+                    state_only=self.cfg.normalize_state_only
+                )
 
         # RL agent dataloader
         if self.cfg.train_byol:
@@ -153,13 +181,21 @@ class Workspace:
                 self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                self.agent_dataloader, _ = d4rl_rnd_iterative_dataloader(self.cfg.task, lvl, self.cfg.policy_batch_size, normalize=self.cfg.normalize_inputs, state_only=self.cfg.normalize_state_only)
+                self.agent_dataloader, _ = d4rl_rnd_iterative_dataloader(
+                    self.cfg.task,
+                    lvl,
+                    self.cfg.policy_batch_size,
+                    normalize=self.cfg.normalize_inputs,
+                    state_only=self.cfg.normalize_state_only
+                )
         
         # RL agent
         if self.cfg.learner == 'ddpg':
             self.agent = DDPG(self.cfg, self.byol_trainer, self.rnd_trainer)
         elif self.cfg.learner == 'sac':
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
+        elif self.cfg.task in ATARI_ENVS:
+            self.agent = DQN(self.cfg, self.byol_trainer, self.rnd_trainer)
         else:
             self.agent = TD3(self.cfg, self.byol_trainer, self.rnd_trainer)
             
@@ -489,9 +525,9 @@ def main(cfg):
     # actual training + sanity checking
     if cfg.wandb:
         with wandb.init(project=project_name, entity=entity, name=name) as run:
-            workspace.train_ae()
+            train_model()
     else:
-        workspace.train_ae()
+        train_model()
         
 if __name__ == '__main__':
     main()

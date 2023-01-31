@@ -5,7 +5,6 @@ from byol_offline.networks.network_utils import INITIALIZERS
 
 class ResidualBlock(hk.Module):
   """Residual block."""
-
   def __init__(self, num_channels, name=None):
       super().__init__(name=name)
       self._num_channels = num_channels
@@ -17,13 +16,15 @@ class ResidualBlock(hk.Module):
               self._num_channels,
               kernel_shape=[3, 3],
               stride=[1, 1],
-              padding='SAME'),
+              padding='SAME'
+          ),
           jax.nn.relu,
           hk.Conv2D(
               self._num_channels,
               kernel_shape=[3, 3],
               stride=[1, 1],
-              padding='SAME'),
+              padding='SAME'
+          ),
       ])
       return main_branch(x) + x
 
@@ -33,13 +34,13 @@ class DrQv2Encoder(hk.Module):
         super().__init__()
         
         self.convnet = hk.Sequential([
-            hk.Conv2D(32, kernel_shape=3, stride=2, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2D(32, kernel_shape=3, stride=2, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2D(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2D(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2D(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2D(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
-            hk.Conv2D(32, kernel_shape=3, stride=1, w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2D(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
             jax.nn.relu,
             hk.Flatten()
         ])
@@ -55,13 +56,13 @@ class DreamerEncoder(hk.Module):
         super().__init__()
         
         self.convnet = hk.Sequential([
-            hk.Conv2D(depth, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
+            hk.Conv2D(depth, kernel_shape=4, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
             jax.nn.elu,
-            hk.Conv2D(depth * 2, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
+            hk.Conv2D(depth * 2, kernel_shape=4, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
             jax.nn.elu,
-            hk.Conv2D(depth * 4, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
+            hk.Conv2D(depth * 4, kernel_shape=4, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
             jax.nn.elu,
-            hk.Conv2D(depth * 8, kernel_shape=4, stride=2, w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
+            hk.Conv2D(depth * 8, kernel_shape=4, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform'], b_init=INITIALIZERS['zeros']),
             jax.nn.elu,
             hk.Flatten()
         ])
