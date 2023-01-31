@@ -19,7 +19,6 @@ from utils import *
 class Workspace:
     def __init__(self, cfg):
         self.work_dir = Path.cwd()
-        print(f'current working directory: {self.work_dir}')
         
         self.cfg = cfg
         self.setup()
@@ -195,6 +194,7 @@ class Workspace:
         elif self.cfg.learner == 'sac':
             self.agent = SAC(self.cfg, self.byol_trainer, self.rnd_trainer)
         elif self.cfg.task in ATARI_ENVS:
+            assert self.cfg.learner == 'dqn', 'DQN is the only one that works in discrete domains like Atari.'
             self.agent = DQN(self.cfg, self.byol_trainer, self.rnd_trainer)
         else:
             self.agent = TD3(self.cfg, self.byol_trainer, self.rnd_trainer)
@@ -215,6 +215,9 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, rewards, _, _ = batch
+                print(f'obs shape: {obs.shape}')
+                print(f'actions shape: {actions.shape}')
+                print(f'rewards shape: {rewards.shape}')
                 new_train_state, batch_metrics = self.byol_trainer._update(self.byol_trainer.train_state, obs, actions, rewards, self.global_step)
                 self.byol_trainer.train_state = new_train_state
                 

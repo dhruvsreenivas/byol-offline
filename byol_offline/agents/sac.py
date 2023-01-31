@@ -47,7 +47,7 @@ class SAC:
         encoder = hk.without_apply_rng(hk.transform(encoder_fn))
         
         # actor + critic
-        actor_fn = lambda obs, std: SACActor(cfg.action_shape, cfg.hidden_dim)(obs, std)
+        actor_fn = lambda obs: SACActor(cfg.action_shape, cfg.hidden_dim)(obs)
         actor = hk.without_apply_rng(hk.transform(actor_fn))
         
         critic_fn = lambda obs, action: SACCritic(cfg.hidden_dim)(obs, action)
@@ -79,13 +79,13 @@ class SAC:
         
         if cfg.task not in MUJOCO_ENVS:
             if byol is None or cfg.aug == 'rnd':
-                actor_params = actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
+                actor_params = actor.init(key2, batched_zeros_like(20000))
                 critic_params = critic_target_params = critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
             else:
-                actor_params = actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
+                actor_params = actor.init(key2, batched_zeros_like(4096))
                 critic_params = critic_target_params = critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
         else:
-            actor_params = actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
+            actor_params = actor.init(key2, batched_zeros_like(cfg.hidden_dim))
             critic_params = critic_target_params = critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
         
         log_alpha = jnp.asarray(0., dtype=jnp.float32)

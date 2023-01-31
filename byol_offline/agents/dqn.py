@@ -59,7 +59,7 @@ class DQN:
             rng_key=state_key
         )
         
-        gamma = cfg.gamma
+        gamma = cfg.discount
         eps = cfg.eps
         target_update_freq = cfg.target_update_freq
         penalize = cfg.penalize
