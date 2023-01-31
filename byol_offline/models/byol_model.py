@@ -17,6 +17,7 @@ class BYOLTrainState(NamedTuple):
     wm_params: hk.Params
     target_params: hk.Params
     wm_opt_state: optax.OptState
+    rng_key: jax.random.PRNGKey
 
 class ConvLatentWorldModel(hk.Module):
     '''Latent world model for DMC tasks. Primarily inspired by DreamerV2 and DrQv2 repositories.'''
@@ -123,8 +124,8 @@ class MLPLatentWorldModel(hk.Module):
         
         # state + reward prediction
         state_mean = hk.BatchApply(self._decoder)(features) # (T, B, H, W, C)
-        reward_mean = hk.BatchApply(self._reward_predictor)(features)
-        reward_mean = jnp.squeeze(reward_mean)
+        reward_mean = hk.BatchApply(self._reward_predictor)(features) # (T, B, 1)
+        reward_mean = jnp.squeeze(reward_mean) # (T, B), so as to be fine with the rewards coming from dataset
         
         return state_mean, reward_mean, posts, priors
     
@@ -180,10 +181,10 @@ class WorldModelTrainer:
         
         # params
         key = jax.random.PRNGKey(cfg.seed)
-        k1, k2 = jax.random.split(key)
+        init_key, target_key, state_key = jax.random.split(key, 3)
         
-        wm_params = wm.init(k1, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
-        target_params = wm.init(k2, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
+        wm_params = wm.init(init_key, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
+        target_params = wm.init(target_key, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
         
         # copy params across devices if required
         if cfg.pmap:
@@ -208,7 +209,8 @@ class WorldModelTrainer:
         self.train_state = BYOLTrainState(
             wm_params=wm_params,
             target_params=target_params,
-            wm_opt_state=wm_opt_state
+            wm_opt_state=wm_opt_state,
+            rng_key=state_key
         )
         
         ema = cfg.ema
@@ -226,14 +228,16 @@ class WorldModelTrainer:
             
             return distrax.Independent(dist, 1)
         
-        def _get_img_or_reward_dist(mean: jnp.ndarray, img=False) -> distrax.Distribution:
-            mean = jnp.reshape(mean, (-1,) + mean.shape[2:]) # (T, B, ...) -> (T * B, ...)
+        def _get_img_dist(mean: jnp.ndarray) -> distrax.Distribution:
             dist = distrax.Normal(mean, 1.0)
-            dist = distrax.Independent(dist, 3 if img else 1)
+            dist = distrax.Independent(dist, 3)
+            return dist
+        
+        def _get_reward_dist(mean: jnp.ndarray) -> distrax.Distribution:
+            dist = distrax.Normal(mean, 1.0)
             return dist
     
         # define loss functions + update functions
-        @jax.jit
         def wm_loss_fn_window_size(wm_params: hk.Params,
                                    target_params: hk.Params,
                                    obs_seq: jnp.ndarray,
@@ -270,8 +274,8 @@ class WorldModelTrainer:
             
             # get dreamer losses and ONLY add to loss vec, not second term (i.e. leave exploration term alone as second term)
             img_mean, reward_mean, post_stats, prior_stats = dreamer_extras
-            img_dist = _get_img_or_reward_dist(img_mean, img=True)
-            reward_dist = _get_img_or_reward_dist(reward_mean, img=False)
+            img_dist = _get_img_dist(img_mean)
+            reward_dist = _get_reward_dist(reward_mean)
             rec_loss = -img_dist.log_prob(obs_window).mean() - reward_dist.log_prob(reward_window).mean()
             
             post_dist = _get_latent_dist(post_stats)
@@ -287,24 +291,24 @@ class WorldModelTrainer:
             total_loss = jnp.mean(byol_loss_vec) + beta * (kl + rec_loss)
             return total_loss, (byol_loss_vec, metrics)
         
-        @jax.jit
         def wm_loss_fn(wm_params: hk.Params,
                        target_params: hk.Params,
                        obs_seq: jnp.ndarray,
                        action_seq: jnp.ndarray,
-                       reward_seq: jnp.ndarray) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, Dict]]:
+                       reward_seq: jnp.ndarray,
+                       key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, Dict]]:
             
             T, B = obs_seq.shape[:2]
 
             def ws_body_fn(ws, curr_state):
                 curr_loss, (curr_loss_window, curr_metrics) = curr_state
-                loss, (loss_window, metrics) = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, reward_seq, ws)
+                loss, (loss_window, metrics) = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, reward_seq, key, ws)
                 curr_metrics.update({
                     'rec': curr_metrics['rec'] + metrics['rec'],
                     'kl': curr_metrics['kl'] + metrics['kl'],
                     'byol': curr_metrics['byol'] + metrics['byol']
                 })
-                return curr_loss + loss, (curr_loss_window + loss_window, metrics)
+                return curr_loss + loss, (curr_loss_window + loss_window, curr_metrics)
             
             init_metrics = dict(rec=0.0, kl=0.0, byol=0.0)
             init_state = (0.0, (jnp.zeros((T, B)), init_metrics))
@@ -318,8 +322,9 @@ class WorldModelTrainer:
                    step: int):
             del step
             
+            update_key, state_key = jax.random.split(train_state.rng_key)
             loss_grad_fn = jax.value_and_grad(wm_loss_fn, has_aux=True)
-            (loss, (_, metrics)), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards)
+            (loss, (_, metrics)), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
             
             if cfg.pmap:
                 loss = jax.lax.pmean(loss, axis_name='device') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
@@ -329,7 +334,12 @@ class WorldModelTrainer:
             new_params = optax.apply_updates(train_state.wm_params, update)
             
             new_target_params = target_update_fn(new_params, train_state.target_params, ema)
-            new_train_state = BYOLTrainState(wm_params=new_params, target_params=new_target_params, wm_opt_state=new_opt_state)
+            new_train_state = BYOLTrainState(
+                wm_params=new_params,
+                target_params=new_target_params,
+                wm_opt_state=new_opt_state,
+                rng_key=state_key # TODO is this the right way to set keys?
+            )
             
             metrics.update({'wm_loss': loss})
             return new_train_state, metrics

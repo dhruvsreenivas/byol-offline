@@ -68,6 +68,7 @@ def test_rssm(cfg):
     
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model_module(cfg):
+    '''Testing if the world model module apply method works.'''
     # Make sure print statements are enabled in WM __call__ function to print out state when running this method
     key = jax.random.PRNGKey(42)
     init_key, apply_key, key1, key2 = jax.random.split(key, 4)
@@ -91,6 +92,26 @@ def test_world_model_module(cfg):
     print(embeds.shape)
     for e in extras:
         print(e.shape)
+
+@hydra.main(config_path='cfgs', config_name='config')
+def test_world_model_update(cfg):
+    '''Testing if the world model loss function/update scheme works.'''
+    cfg.obs_shape = (64, 64, 9)
+    cfg.action_shape = (6,)
+    
+    wm_trainer = WorldModelTrainer(cfg.byol)
+    
+    # rand inputs for updating
+    key = jax.random.PRNGKey(42)
+    obs_key, act_key, rew_key = jax.random.split(key, 3)
+    rand_obs = jax.random.normal(obs_key, (20, 10, 64, 64, 9))
+    rand_act = jax.random.normal(act_key, (20, 10, 6))
+    rand_rew = jax.random.normal(rew_key, (20, 10))
+    print('=' * 20 + ' created rand inputs ' + '=' * 20)
+    
+    new_state, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
+    for k, v in metrics.items():
+        print(f'{k}: {v}')
 
 def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
@@ -350,4 +371,4 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    test_sampler_dataloading(d4rl=False, byol=True)
+    test_world_model_update()
