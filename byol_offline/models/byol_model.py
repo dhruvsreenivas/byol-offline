@@ -238,14 +238,13 @@ class WorldModelTrainer:
             return dist
     
         # define loss functions + update functions
-        def wm_loss_fn_window_size(wm_params: hk.Params,
-                                   target_params: hk.Params,
-                                   obs_seq: jnp.ndarray,
-                                   action_seq: jnp.ndarray,
-                                   reward_seq: jnp.ndarray,
-                                   key: jax.random.PRNGKey,
-                                   window_size: int) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, Dict]]:
-            
+        def byol_loss_fn_window_size(wm_params: hk.Params,
+                                     target_params: hk.Params,
+                                     obs_seq: jnp.ndarray,
+                                     action_seq: jnp.ndarray,
+                                     key: jax.random.PRNGKey,
+                                     window_size: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            '''Only BYOL-Explore loss.'''
             T, B = obs_seq.shape[:2]
             pred_key, target_key = jax.random.split(key)
 
@@ -253,9 +252,8 @@ class WorldModelTrainer:
             starting_idx = T - window_size
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
-            reward_window = sliding_window(reward_seq, starting_idx, window_size) # (T, B)
             
-            pred_latents, _, dreamer_extras = wm.apply(wm_params, pred_key, obs_window, action_window)
+            pred_latents, _, _ = wm.apply(wm_params, pred_key, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
             _, target_latents, _ = wm.apply(target_params, target_key, obs_window, action_window) # (T, B, embed_dim)
@@ -272,11 +270,20 @@ class WorldModelTrainer:
             mses = jnp.roll(mses, shift=starting_idx, axis=0)
             byol_loss_vec = jnp.sum(mses, -1) # (T, B)
             
-            # get dreamer losses and ONLY add to loss vec, not second term (i.e. leave exploration term alone as second term)
+            byol_loss = jnp.mean(byol_loss_vec)
+            return byol_loss, byol_loss_vec
+        
+        def dreamer_loss_fn(wm_params: hk.Params,
+                            obs_seq: jnp.ndarray,
+                            action_seq: jnp.ndarray,
+                            reward_seq: jnp.ndarray,
+                            key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Dict]:
+            '''Only dreamer loss, and so no need for masking, and can model entire sequence without overlap.'''
+            _, _, dreamer_extras = wm.apply(wm_params, key, obs_seq, action_seq)
             img_mean, reward_mean, post_stats, prior_stats = dreamer_extras
             img_dist = _get_img_dist(img_mean)
             reward_dist = _get_reward_dist(reward_mean)
-            rec_loss = -img_dist.log_prob(obs_window).mean() - reward_dist.log_prob(reward_window).mean()
+            rec_loss = -img_dist.log_prob(obs_seq).mean() - reward_dist.log_prob(reward_seq).mean()
             
             post_dist = _get_latent_dist(post_stats)
             prior_dist = _get_latent_dist(prior_stats)
@@ -284,47 +291,56 @@ class WorldModelTrainer:
             
             metrics = {
                 'rec': rec_loss,
-                'kl': kl,
-                'byol': jnp.mean(byol_loss_vec)
+                'kl': kl
             }
             
-            total_loss = jnp.mean(byol_loss_vec) + beta * (kl + rec_loss)
-            return total_loss, (byol_loss_vec, metrics)
+            return rec_loss + kl, metrics
         
-        def wm_loss_fn(wm_params: hk.Params,
-                       target_params: hk.Params,
-                       obs_seq: jnp.ndarray,
-                       action_seq: jnp.ndarray,
-                       reward_seq: jnp.ndarray,
-                       key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, Dict]]:
+        def byol_loss_fn(wm_params: hk.Params,
+                         target_params: hk.Params,
+                         obs_seq: jnp.ndarray,
+                         action_seq: jnp.ndarray,
+                         key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, jnp.ndarray]:
             
             T, B = obs_seq.shape[:2]
 
             def ws_body_fn(ws, curr_state):
-                curr_loss, (curr_loss_window, curr_metrics) = curr_state
-                loss, (loss_window, metrics) = wm_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, reward_seq, key, ws)
-                curr_metrics.update({
-                    'rec': curr_metrics['rec'] + metrics['rec'],
-                    'kl': curr_metrics['kl'] + metrics['kl'],
-                    'byol': curr_metrics['byol'] + metrics['byol']
-                })
-                return curr_loss + loss, (curr_loss_window + loss_window, curr_metrics)
+                curr_loss, curr_loss_window, key = curr_state
+                loss_key, moveon_key = jax.random.split(key)
+                loss, loss_window = byol_loss_fn_window_size(wm_params, target_params, obs_seq, action_seq, loss_key, ws)
+                return curr_loss + loss, curr_loss_window + loss_window, moveon_key
             
-            init_metrics = dict(rec=0.0, kl=0.0, byol=0.0)
-            init_state = (0.0, (jnp.zeros((T, B)), init_metrics))
-            total_loss, (total_loss_window, metrics) = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
-            return total_loss / T, (total_loss_window / T, metrics) # take avgs
+            init_state = (0.0, jnp.zeros((T, B)), key)
+            total_loss, total_loss_window, _ = jax.lax.fori_loop(1, T + 1, ws_body_fn, init_state)
+            return total_loss / T, total_loss_window / T # take avgs
+        
+        def total_loss_fn(wm_params: hk.Params,
+                          target_params: hk.Params,
+                          obs_seq: jnp.ndarray,
+                          action_seq: jnp.ndarray,
+                          reward_seq: jnp.ndarray,
+                          key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Dict]:
+            '''Combining BYOL and Dreamer losses.'''
+            byol_key, dreamer_key = jax.random.split(key)
+            byol_loss, _ = byol_loss_fn(wm_params, target_params, obs_seq, action_seq, byol_key)
+            dreamer_loss, metrics = dreamer_loss_fn(wm_params, obs_seq, action_seq, reward_seq, dreamer_key)
+            metrics['byol'] = byol_loss
+            
+            total_loss = byol_loss + beta * dreamer_loss
+            metrics['total'] = total_loss
+            return total_loss, metrics
         
         def update(train_state: BYOLTrainState,
                    obs: jnp.ndarray,
                    actions: jnp.ndarray,
                    rewards: jnp.ndarray,
-                   step: int):
+                   step: int) -> Tuple[BYOLTrainState, Dict]:
+            '''Updates the model.'''
             del step
             
             update_key, state_key = jax.random.split(train_state.rng_key)
-            loss_grad_fn = jax.value_and_grad(wm_loss_fn, has_aux=True)
-            (loss, (_, metrics)), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
+            loss_grad_fn = jax.value_and_grad(total_loss_fn, has_aux=True)
+            (loss, metrics), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
             
             if cfg.pmap:
                 loss = jax.lax.pmean(loss, axis_name='device') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
@@ -341,23 +357,20 @@ class WorldModelTrainer:
                 rng_key=state_key # TODO is this the right way to set keys?
             )
             
-            metrics.update({'wm_loss': loss})
             return new_train_state, metrics
         
         def compute_uncertainty(obs_seq: jnp.ndarray,
                                 action_seq: jnp.ndarray,
-                                reward_seq: jnp.ndarray,
                                 step: int):
             '''Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
             
             :param obs_seq: Sequence of observations, of shape (seq_len, B, obs_dim)
             :param action_seq: Sequence of actions, of shape (seq_len, B, action_dim)
-            :param reward_seq: Sequence of rewards, of shape (seq_len, B, 1)
             
             :return uncertainties: Model uncertainties, of shape (seq_len, B).
             '''
             del step
-            _, (losses, _) = wm_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq, reward_seq)
+            _, losses = byol_loss_fn(self.train_state.wm_params, self.train_state.target_params, obs_seq, action_seq)
             # losses are of shape (T, B), result of only BYOL loss accumulation
             return jax.lax.stop_gradient(losses)
         

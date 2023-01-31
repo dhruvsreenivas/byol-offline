@@ -210,11 +210,12 @@ class Workspace:
     
     def train_byol(self):
         '''Train BYOL-Explore latent world model offline.'''
+        save_every = Every(self.cfg.model_save_every)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
-                obs, actions, _, _, _ = batch
-                new_train_state, batch_metrics = self.byol_trainer._update(self.byol_trainer.train_state, obs, actions, self.global_step)
+                obs, actions, rewards, _, _ = batch
+                new_train_state, batch_metrics = self.byol_trainer._update(self.byol_trainer.train_state, obs, actions, rewards, self.global_step)
                 self.byol_trainer.train_state = new_train_state
                 
                 for k, v in batch_metrics.items():
@@ -226,7 +227,7 @@ class Workspace:
             else:
                 print_dict(log_dump)
             
-            if self.cfg.save_model and epoch % self.cfg.model_save_every == 0:
+            if self.cfg.save_model and save_every(epoch):
                 model_path = self.pretrained_byol_dir / f'byol_{epoch}.pkl'
                 self.byol_trainer.save(model_path)
                 
