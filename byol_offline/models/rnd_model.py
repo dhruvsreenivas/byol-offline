@@ -185,12 +185,13 @@ class RNDModelTrainer:
             return jax.lax.stop_gradient(diff)
         
         # define update + uncertainty computation
-        self._update = jax.jit(update)
-        self._compute_uncertainty = jax.jit(compute_uncertainty)
-        
+        # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
-            self._update = jax.pmap(self._update)
-            self._compute_uncertainty = jax.pmap(self._compute_uncertainty)
+            self._update = jax.pmap(update, axis_name='device')
+            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='device')
+        else:
+            self._update = jax.jit(update)
+            self._compute_uncertainty = jax.jit(compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

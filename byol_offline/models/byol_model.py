@@ -19,8 +19,8 @@ class BYOLTrainState(NamedTuple):
     wm_opt_state: optax.OptState
     rng_key: jax.random.PRNGKey
 
-class ConvLatentWorldModel(hk.Module):
-    '''Latent world model for DMC tasks. Primarily inspired by DreamerV2 and DrQv2 repositories.'''
+class ConvWorldModel(hk.Module):
+    '''World model for DMC tasks. Primarily inspired by DreamerV2 and DrQv2 repositories.'''
     def __init__(self, cfg):
         super().__init__()
         
@@ -94,8 +94,8 @@ class ConvLatentWorldModel(hk.Module):
         # return
         return pred_latents, embeds, dreamer_extras
 
-class MLPLatentWorldModel(hk.Module):
-    '''Latent world model for D4RL tasks. Primarily inspired by MOPO repository.'''
+class MLPWorldModel(hk.Module):
+    '''World model for D4RL tasks. Primarily inspired by MOPO repository.'''
     def __init__(self, cfg):
         super().__init__()
         
@@ -172,9 +172,9 @@ class WorldModelTrainer:
     def __init__(self, cfg):
         # set up
         if cfg.task in MUJOCO_ENVS:
-            wm_fn = lambda o, a: MLPLatentWorldModel(cfg.d4rl)(o, a)
+            wm_fn = lambda o, a: MLPWorldModel(cfg.d4rl)(o, a)
         else:
-            wm_fn = lambda o, a: ConvLatentWorldModel(cfg.vd4rl)(o, a)
+            wm_fn = lambda o, a: ConvWorldModel(cfg.vd4rl)(o, a)
         
         # should be ok with byol loss here, as byol loss is regardless deterministic and only depends on deter states
         wm = hk.transform(wm_fn) # rngs are used in the dreamer section of the model for generation, so cannot use without_apply_rng
@@ -343,8 +343,8 @@ class WorldModelTrainer:
             (loss, metrics), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
             
             if cfg.pmap:
-                loss = jax.lax.pmean(loss, axis_name='device') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
-                grads = jax.lax.pmean(grads, axis_name='device')
+                loss = jax.lax.pmean(loss, axis_name='batch') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
+                grads = jax.lax.pmean(grads, axis_name='batch')
             
             update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
@@ -374,13 +374,14 @@ class WorldModelTrainer:
             # losses are of shape (T, B), result of only BYOL loss accumulation
             return jax.lax.stop_gradient(losses)
         
-        self._update = jax.jit(update)
-        self._compute_uncertainty = jax.jit(compute_uncertainty)
-        
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
+        # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
-            self._update = jax.pmap(self._update)
-            self._compute_uncertainty = jax.pmap(self._compute_uncertainty)
+            self._update = jax.pmap(update, axis_name='batch')
+            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='batch')
+        else:
+            self._update = jax.jit(update)
+            self._compute_uncertainty = jax.jit(compute_uncertainty)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

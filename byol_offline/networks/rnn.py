@@ -42,8 +42,6 @@ class LayerNormGRU(hk.RNNCore):
 class RSSM(hk.Module):
     '''
     Recurrent state space model used in DreamerV1/V2 (discrete or continuous). Similar to BYOL-Explore latent world model.
-    
-    Going to add a BYOL prediction head to DreamerV2 world model to compute BYOL offline loss.
     '''
     def __init__(self, cfg):
         super().__init__()

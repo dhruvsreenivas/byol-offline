@@ -143,7 +143,7 @@ class Workspace:
         
         # BYOL dataloader
         if self.cfg.task not in MUJOCO_ENVS:
-            byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len)
+            byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
         else:
             lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
             byol_buffer = D4RLSequenceReplayBuffer(
@@ -200,8 +200,9 @@ class Workspace:
             self.agent = TD3(self.cfg, self.byol_trainer, self.rnd_trainer)
             
         # sanity checking (BC + simple dynamics model)
-        self.simple_dynamics_trainer = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
-        self.bc = BC(self.cfg)
+        if self.cfg.task in MUJOCO_ENVS:
+            self.simple_dynamics_trainer = SimpleDynamicsTrainer(self.cfg.simple_dynamics)
+            self.bc = BC(self.cfg)
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
@@ -215,9 +216,6 @@ class Workspace:
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
                 obs, actions, rewards, _, _ = batch
-                print(f'obs shape: {obs.shape}')
-                print(f'actions shape: {actions.shape}')
-                print(f'rewards shape: {rewards.shape}')
                 new_train_state, batch_metrics = self.byol_trainer._update(self.byol_trainer.train_state, obs, actions, rewards, self.global_step)
                 self.byol_trainer.train_state = new_train_state
                 
@@ -457,6 +455,7 @@ class Workspace:
     
     def train_simple(self):
         '''Train simple dynamics model.'''
+        assert self.cfg.task in MUJOCO_ENVS, 'only testing simple approaches in D4RL settings.'
         for _ in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.rnd_dataloader:
