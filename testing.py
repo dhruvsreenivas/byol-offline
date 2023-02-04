@@ -10,6 +10,7 @@ import gym
 from pathlib import Path
 from tqdm import trange
 import wandb
+import time
 
 from byol_offline.networks.encoder import *
 from byol_offline.networks.decoder import *
@@ -77,11 +78,11 @@ def test_world_model_module(cfg):
     cfg.action_shape = (6,)
 
     # dummy input creation
-    dummy_obs = jax.random.normal(key1, shape=(20, 10, 64, 64, 9))
-    dummy_actions = jax.random.normal(key2, shape=(20, 10, 6))
+    dummy_obs = jax.random.normal(key1, shape=(10, 50, 64, 64, 9))
+    dummy_actions = jax.random.normal(key2, shape=(10, 50, 6))
     
     # world model creation
-    wm_fn = lambda o, a: ConvLatentWorldModel(cfg.byol.vd4rl)(o, a)
+    wm_fn = lambda o, a: ConvWorldModel(cfg.byol.vd4rl)(o, a)
     wm = hk.transform(wm_fn)
     params = wm.init(init_key, dummy_obs, dummy_actions)
 
@@ -103,14 +104,38 @@ def test_world_model_update(cfg):
     
     # rand inputs for updating
     key = jax.random.PRNGKey(42)
-    obs_key, act_key, rew_key = jax.random.split(key, 3)
-    rand_obs = jax.random.normal(obs_key, (20, 10, 64, 64, 9))
-    rand_act = jax.random.normal(act_key, (20, 10, 6))
-    rand_rew = jax.random.normal(rew_key, (20, 10))
-    print('=' * 20 + ' created rand inputs ' + '=' * 20)
+    first_key, second_key = jax.random.split(key)
     
+    obs_key, act_key, rew_key = jax.random.split(first_key, 3)
+    rand_obs = jax.random.normal(obs_key, (10, 50, 64, 64, 9))
+    rand_act = jax.random.normal(act_key, (10, 50, 6))
+    rand_rew = jax.random.normal(rew_key, (10, 50))
+    print('=' * 20 + ' created first set of rand inputs ' + '=' * 20)
+    
+    start_time = time.time()
     _, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
+    end_time = time.time()
     print_dict(metrics)
+    
+    secs = end_time - start_time
+    mins = int(secs // 60)
+    secs = secs % 60
+    print(f'total amount of time taken for jit compile + update: {mins} mins & {secs} secs.')
+    
+    obs_key_2, act_key_2, rew_key_2 = jax.random.split(second_key, 3)
+    rand_obs_2 = jax.random.normal(obs_key_2, (10, 50, 64, 64, 9))
+    rand_act_2 = jax.random.normal(act_key_2, (10, 50, 6))
+    rand_rew_2 = jax.random.normal(rew_key_2, (10, 50))
+    print('=' * 20 + ' created second set of rand inputs ' + '=' * 20)
+    
+    start_time_2 = time.time()
+    _, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs_2, rand_act_2, rand_rew_2, 0)
+    end_time_2 = time.time()
+    
+    secs_2 = end_time_2 - start_time_2
+    mins_2 = int(secs_2 // 60)
+    secs_2 = secs_2 % 60
+    print(f'total amount of time for 1 update after jit compilation: {mins_2} mins & {secs_2} secs.')
 
 def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
