@@ -64,9 +64,8 @@ class RSSM(hk.Module):
         else:
             self._gru = hk.GRU(cfg.gru_hidden_size, w_i_init=glorot_w_init, w_h_init=ortho_init)
         
-        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if self._discrete else 2 * cfg.stoch_dim
-        
         # DreamerV2 online uses only 1 prior, and since we're not ensembling here we don't mind doing the same thing
+        dist_dim = cfg.stoch_dim * cfg.stoch_discrete_dim if self._discrete else 2 * cfg.stoch_dim
         self._prior_mlp = hk.Sequential([
             hk.Linear(cfg.hidden_dim, w_init=glorot_w_init),
             jax.nn.elu,
@@ -78,11 +77,14 @@ class RSSM(hk.Module):
             hk.Linear(dist_dim, w_init=glorot_w_init)
         ])
         
-    def _init_feature(self, batch_size):
+    def _init_feature(self, batch_size: Optional[int]):
         stoch_shape = self._stoch_dim * self._stoch_discrete_dim # 1 if not discrete!
-        return jnp.zeros((batch_size, stoch_shape + self._deter_dim))
+        if batch_size is not None:
+            return jnp.zeros((batch_size, stoch_shape + self._deter_dim))
+        else:
+            return jnp.zeros((stoch_shape + self._deter_dim))
 
-    def _get_dist(self, stats):
+    def _get_dist(self, stats: jnp.ndarray):
         if self._discrete:
             logits = jnp.reshape(stats, stats.shape[:-1] + (self._stoch_dim, self._stoch_discrete_dim))
             dist_class = distrax.straight_through_wrapper(distrax.OneHotCategorical)

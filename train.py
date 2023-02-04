@@ -99,6 +99,10 @@ class Workspace:
         if self.cfg.sample_batches:
             if self.cfg.task not in MUJOCO_ENVS:
                 rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
+                
+                # standard reward min + max
+                self.cfg.reward_min = -1.0
+                self.cfg.reward_max = 1.0
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 rnd_buffer = D4RLTransitionReplayBuffer(
@@ -206,6 +210,12 @@ class Workspace:
         
         # rng (in case we actually need to use it later on)
         self.rng = jax.random.PRNGKey(self.cfg.seed)
+        
+    # ==================== EVALUATION ====================
+    
+    def eval_model(self):
+        '''Evaluates DMC model by decoding from the posterior of some test trajectory in the dataset, and seeing how well the model can reconstruct the images.'''
+        
 
     # ==================== MODEL TRAINING ====================
     
@@ -492,10 +502,10 @@ class Workspace:
 def main(cfg):
     workspace = Workspace(cfg)
     
-    print('=' * 50)
+    print('=' * 28)
     from jax.lib import xla_bridge
     print(f'Experiment is running on {xla_bridge.get_backend().platform}')
-    print('=' * 50)
+    print('=' * 28)
     
     entity = 'dhruv_sreenivas'
     project_name = cfg.project_name

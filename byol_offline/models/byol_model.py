@@ -59,7 +59,24 @@ class ConvWorldModel(hk.Module):
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
+    
+    # ===== eval functions (imagining/observing one step, many steps, etc...) =====
+    def _onestep_imagine(self, action, state):
+        new_state, _ = self._rssm._onestep_prior(action, state)
+        img_mean = self._decoder(new_state)
+        reward_mean = self._reward_predictor(new_state)
         
+        return img_mean, reward_mean
+    
+    def _onestep_observe(self, obs, action, state):
+        emb = self._encoder(obs)
+        new_state, _ = self._rssm._onestep_post(emb, action, state)
+        img_mean = self._decoder(new_state)
+        reward_mean = self._reward_predictor(new_state)
+        
+        return img_mean, reward_mean
+    
+    # ===== things used in training/to define loss function in trainer =====
     def _dreamer_extras(self, embeds, actions):
         # always start with init state at zeros
         posts, priors, features = self._rssm(embeds, actions, None)
@@ -119,6 +136,23 @@ class MLPWorldModel(hk.Module):
         )
         self._byol_predictor = BYOLPredictor(cfg.repr_dim)
         
+    # ===== eval functions (imagining/observing one step, many steps, etc...) =====
+    def _onestep_imagine(self, action, state):
+        new_state, _ = self._rssm._onestep_prior(action, state)
+        state_mean = self._decoder(new_state)
+        reward_mean = self._reward_predictor(new_state)
+        
+        return state_mean, reward_mean
+    
+    def _onestep_observe(self, obs, action, state):
+        emb = self._encoder(obs)
+        new_state, _ = self._rssm._onestep_post(emb, action, state)
+        state_mean = self._decoder(new_state)
+        reward_mean = self._reward_predictor(new_state)
+        
+        return state_mean, reward_mean
+    
+    # ===== things used in training/to define loss function in trainer =====
     def _dreamer_extras(self, embeds, actions):
         posts, priors, features = self._rssm(embeds, actions, None)
         
@@ -281,6 +315,7 @@ class WorldModelTrainer:
             '''Only dreamer loss, and so no need for masking, and can model entire sequence without overlap.'''
             _, _, dreamer_extras = wm.apply(wm_params, key, obs_seq, action_seq)
             img_mean, reward_mean, post_stats, prior_stats = dreamer_extras
+            
             img_dist = _get_img_dist(img_mean)
             reward_dist = _get_reward_dist(reward_mean)
             rec_loss = -img_dist.log_prob(obs_seq).mean() - reward_dist.log_prob(reward_seq).mean()
