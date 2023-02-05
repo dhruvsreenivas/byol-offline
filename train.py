@@ -9,6 +9,7 @@ from hydra.utils import to_absolute_path
 from collections import defaultdict
 import wandb
 from datetime import datetime
+from PIL import Image
 
 from byol_offline.models import *
 from byol_offline.agents import *
@@ -213,15 +214,45 @@ class Workspace:
         
     # ==================== EVALUATION ====================
     
-    def eval_model(self):
+    def eval_byol(self):
         '''Evaluates DMC model by decoding from the posterior of some test trajectory in the dataset, and seeing how well the model can reconstruct the images.'''
+        obs, acts, first_frames = get_test_traj(self.offline_dir)
+        new_state, post_img_means = self.byol_trainer._eval(obs, acts, post=True)
+        new_state, prior_img_means = self.byol_trainer._eval(obs, acts, post=False)
         
+        self.byol_trainer.train_state = new_state
+        
+        T = post_img_means.shape[0]
+        assert prior_img_means.shape[0] == T and first_frames.shape[0] == T, 'not the same amount of things to log!'
+        if self.cfg.wandb:
+            log_pred_post = [
+                Image.fromarray(post_img_means[x])
+                for x in range(0, T, 5)
+            ]
+            
+            log_pred_prior = [
+                Image.fromarray(prior_img_means[x])
+                for x in range(0, T, 5)
+            ]
+            
+            log_actual = [
+                Image.fromarray(first_frames[x])
+                for x in range(0, T, 5)
+            ]
+            
+            for post, prior, a in zip(log_pred_post, log_pred_prior, log_actual):
+                wandb.log({
+                    'actual': wandb.Image(a, 'actual'),
+                    'post': wandb.Image(post, 'post'),
+                    'prior': wandb.Image(prior, 'prior')
+                })
 
     # ==================== MODEL TRAINING ====================
     
     def train_byol(self):
         '''Train BYOL-Explore latent world model offline.'''
         save_every = Every(self.cfg.model_save_every)
+        eval_every = Every(self.cfg.model_eval_every)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
             for batch in self.byol_dataloader:
@@ -237,6 +268,9 @@ class Workspace:
                 wandb.log(log_dump)
             else:
                 print_dict(log_dump)
+                
+            if self.cfg.eval_model and eval_every(epoch):
+                self.eval_byol()
             
             if self.cfg.save_model and save_every(epoch):
                 model_path = self.pretrained_byol_dir / f'byol_{epoch}.pkl'
@@ -488,7 +522,7 @@ class Workspace:
         '''Train on one datapoint to make sure loss goes down.'''
         self.rng, subkey = jax.random.split(self.rng)
         rand_datapoint = jax.random.normal(key=subkey, shape=(1,) + tuple(self.cfg.obs_shape), dtype=jnp.float32)
-        for epoch in trange(1, self.cfg.model_train_epochs + 1):
+        for _ in trange(1, self.cfg.model_train_epochs + 1):
             new_train_state, metrics = self.rnd_trainer._update(self.rnd_trainer.train_state, rand_datapoint, self.global_step)
             self.rnd_trainer.train_state = new_train_state
             

@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 import haiku as hk
 import optax
 import distrax
@@ -84,13 +85,17 @@ class ConvWorldModel(hk.Module):
         embeds = hk.BatchApply(self._encoder)(obs)
         
         # always start with init state at zeros
-        posts, priors, features = self._rssm(embeds, actions, None)
+        posts, priors, post_features, prior_features = self._rssm(embeds, actions, None)
         # posts: (T, B, dist_dim), priors: (T, B, dist_dim), features: (T, B, feature_dim)
-        img_mean = hk.BatchApply(self._decoder)(features) # (T, B, H, W, C)
-        reward_mean = hk.BatchApply(self._reward_predictor)(features)
-        reward_mean = jnp.squeeze(reward_mean)
+        post_img_mean = hk.BatchApply(self._decoder)(post_features) # (T, B, H, W, C)
+        post_reward_mean = hk.BatchApply(self._reward_predictor)(post_features)
+        post_reward_mean = jnp.squeeze(post_reward_mean)
         
-        return img_mean, reward_mean, posts, priors
+        prior_img_mean = hk.BatchApply(self._decoder)(prior_features)
+        prior_reward_mean = hk.BatchApply(self._reward_predictor)(prior_features)
+        prior_reward_mean = jnp.squeeze(prior_reward_mean)
+        
+        return post_img_mean, post_reward_mean, prior_img_mean, prior_reward_mean, posts, priors
     
     def _byol_forward(self, obs, actions):
         # first get embeddings
@@ -165,14 +170,18 @@ class MLPWorldModel(hk.Module):
         # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
         
         embeds = hk.BatchApply(self._encoder)(obs)
-        posts, priors, features = self._rssm(embeds, actions, None)
+        posts, priors, post_features, prior_features = self._rssm(embeds, actions, None)
         
         # state + reward prediction
-        state_mean = hk.BatchApply(self._decoder)(features) # (T, B, H, W, C)
-        reward_mean = hk.BatchApply(self._reward_predictor)(features) # (T, B, 1)
-        reward_mean = jnp.squeeze(reward_mean) # (T, B), so as to be fine with the rewards coming from dataset
+        post_state_mean = hk.BatchApply(self._decoder)(post_features) # (T, B, H, W, C)
+        post_reward_mean = hk.BatchApply(self._reward_predictor)(post_features) # (T, B, 1)
+        post_reward_mean = jnp.squeeze(post_reward_mean) # (T, B), so as to be fine with the rewards coming from dataset
         
-        return state_mean, reward_mean, posts, priors
+        prior_state_mean = hk.BatchApply(self._decoder)(prior_features)
+        prior_reward_mean = hk.BatchApply(self._reward_predictor)(prior_features)
+        prior_reward_mean = jnp.squeeze(prior_reward_mean)
+        
+        return post_state_mean, post_reward_mean, prior_state_mean, prior_reward_mean, posts, priors
     
     def _byol_forward(self, obs, actions):
         # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
@@ -364,10 +373,10 @@ class WorldModelTrainer:
                             key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Dict]:
             '''Only dreamer loss, and so no need for masking, and can model entire sequence without overlap.'''
             dreamer_out = dreamer_forward(wm_params, key, obs_seq, action_seq)
-            img_mean, reward_mean, post_stats, prior_stats = dreamer_out
+            post_img_mean, post_reward_mean, _, _, post_stats, prior_stats = dreamer_out
             
-            img_dist = _get_img_dist(img_mean)
-            reward_dist = _get_reward_dist(reward_mean)
+            img_dist = _get_img_dist(post_img_mean)
+            reward_dist = _get_reward_dist(post_reward_mean)
             rec_loss = -img_dist.log_prob(obs_seq).mean() - reward_dist.log_prob(reward_seq).mean()
             
             post_dist = _get_latent_dist(post_stats)
@@ -459,25 +468,31 @@ class WorldModelTrainer:
             # losses are of shape (T, B), result of only BYOL loss accumulation
             return jax.lax.stop_gradient(losses)
         
-        def evaluate(obs_seq: jnp.ndarray,
-                     action_seq: jnp.ndarray):
-            '''Evaluate on a test trajectory from the offline dataset.'''
+        # ====== eval methods ======
+        
+        def eval(obs_seq: jnp.ndarray,
+                      action_seq: jnp.ndarray,
+                      post: bool = True):
+            '''Evaluate from posterior on a test trajectory from the offline dataset.'''
             eval_key, state_key = jax.random.split(self.train_state.rng_key)
-            img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
+            post_img_means, _, prior_img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
+            img_means = jnp.where(post, post_img_means, prior_img_means)
+            img_means = ((img_means + 0.5) * 255.0).astype(np.uint8)
+            img_means = img_means[:, :, :, :3] # just the first image
             
-            self.train_state._replace(rng_key=state_key)
-            return img_means
+            new_train_state = self.train_state._replace(rng_key=state_key)
+            return new_train_state, img_means
         
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
             self._update = jax.pmap(update, axis_name='batch')
             self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='batch')
-            self._evaluate = jax.pmap(evaluate, axis_name='batch')
+            self._eval = jax.pmap(eval, axis_name='batch')
         else:
             self._update = jax.jit(update)
             self._compute_uncertainty = jax.jit(compute_uncertainty)
-            self._evaluate = jax.jit(evaluate)
+            self._eval = jax.jit(eval)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

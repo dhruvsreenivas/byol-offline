@@ -2,6 +2,43 @@ import gym
 from gym.wrappers.atari_preprocessing import AtariPreprocessing
 import d4rl
 import jax.numpy as jnp
+import numpy as np
+
+def get_test_traj(path, frame_stack=3, seq_len=10):
+    traj_fns = list(path.glob('*.npz'))
+    traj_fn = np.random.choice(traj_fns)
+    
+    with traj_fn.open('rb') as f:
+        episode = np.load(f)
+    
+    episode_len = next(iter(episode.values())).shape[0] - 1
+    start_idx = np.random.randint(0, episode_len - seq_len)
+    
+    obs = []
+    actions = []
+    first_frames = []
+    for i in range(start_idx, start_idx + seq_len):
+        # current obs
+        if i < frame_stack - 1:
+            repeat = frame_stack - i
+            first_frame = episode["image"][0]
+            other_frames = [episode['image'][j] for j in range(1, i+1)] # i frames exactly
+            ob = np.concatenate([first_frame] * repeat + other_frames, axis=-1).astype(np.float32) # (H, W, C * frame_stack)
+        else:
+            ob = [episode["image"][i - x] for x in reversed(range(frame_stack))]
+            ob = np.concatenate(ob, -1).astype(np.float32)
+            first_frame = episode["image"][i - frame_stack + 1]
+        
+        obs.append(ob)
+        first_frames.append(first_frame)
+        
+        action = episode['action'][i].astype(np.float32)
+        actions.append(action)
+        
+    obs = np.stack(obs)
+    actions = np.stack(actions)
+    first_frames = np.stack(first_frames) # should be uint8 here
+    return obs, actions
 
 class Until:
     def __init__(self, until, action_repeat=1):

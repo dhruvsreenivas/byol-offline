@@ -56,7 +56,9 @@ policy_save_every: 100
 # logging
 wandb: true
 save_model: true
+eval_model: true
 model_save_every: 100
+model_eval_every: 100
 
 # agent training params (common for all)
 reward_min: ???

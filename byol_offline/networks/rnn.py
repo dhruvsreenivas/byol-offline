@@ -139,16 +139,22 @@ class RSSM(hk.Module):
             new_state, post = self._onestep_post(emb, act, state)
             return new_state, post
         
-        def _feature_scan_fn(carry, inp):
+        def _post_feature_scan_fn(carry, inp):
             state = carry
             emb, act = jnp.split(inp, [self._embed_dim], -1)
             new_state, _ = self._onestep_post(emb, act, state)
+            return new_state, new_state
+        
+        def _prior_feature_scan_fn(carry, act):
+            state = carry
+            new_state, _ = self._onestep_prior(act, state)
             return new_state, new_state
         
         init = state
         ea = jnp.concatenate([embeds, actions], -1) # (T, B, embed_dim + action_dim)
         _, priors = hk.scan(_prior_scan_fn, init, actions)
         _, posts = hk.scan(_post_scan_fn, init, ea)
-        _, features = hk.scan(_feature_scan_fn, init, ea)
+        _, post_features = hk.scan(_post_feature_scan_fn, init, ea)
+        _, prior_features = hk.scan(_prior_feature_scan_fn, init, actions)
         
-        return priors, posts, features
+        return priors, posts, post_features, prior_features

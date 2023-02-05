@@ -416,5 +416,5 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    test_world_model_module()
-    # test_world_model_update()
+    # test_world_model_module()
+    test_world_model_update()
