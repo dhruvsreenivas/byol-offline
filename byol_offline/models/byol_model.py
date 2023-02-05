@@ -461,7 +461,7 @@ class WorldModelTrainer:
         
         def evaluate(obs_seq: jnp.ndarray,
                      action_seq: jnp.ndarray):
-            # TODO implement eval protocol
+            '''Evaluate on a test trajectory from the offline dataset.'''
             eval_key, state_key = jax.random.split(self.train_state.rng_key)
             img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
             

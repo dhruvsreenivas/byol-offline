@@ -90,10 +90,10 @@ def test_world_model_module(cfg):
             return wm(o, a)
         
         def dreamer_forward(o, a):
-            return wm(o, a)
+            return wm._dreamer_forward(o, a)
         
         def byol_forward(o, a):
-            return wm._byol_extras(o, a)
+            return wm._byol_forward(o, a)
         
         def imagine_fn(a, s):
             return wm._onestep_imagine(a, s)
@@ -416,5 +416,5 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
-    # test_world_model_module()
-    test_world_model_update()
+    test_world_model_module()
+    # test_world_model_update()
