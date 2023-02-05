@@ -292,7 +292,7 @@ class WorldModelTrainer:
         
         wm_opt_init_fn = wm_opt.init
         if cfg.pmap:
-            wm_opt_state = jax.pmap(wm_opt_init_fn)(wm_params)
+            wm_opt_state = jax.pmap(wm_opt_init_fn, axis_name='i')(wm_params)
         else:
             wm_opt_state = wm_opt_init_fn(wm_params)
         
@@ -437,8 +437,8 @@ class WorldModelTrainer:
             (loss, metrics), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
             
             if cfg.pmap:
-                loss = jax.lax.pmean(loss, axis_name='batch') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
-                grads = jax.lax.pmean(grads, axis_name='batch')
+                loss = jax.lax.pmean(loss, axis_name='i') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
+                grads = jax.lax.pmean(grads, axis_name='i')
             
             update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
@@ -471,8 +471,8 @@ class WorldModelTrainer:
         # ====== eval methods ======
         
         def eval(obs_seq: jnp.ndarray,
-                      action_seq: jnp.ndarray,
-                      post: bool = True):
+                 action_seq: jnp.ndarray,
+                 post: bool = True):
             '''Evaluate from posterior on a test trajectory from the offline dataset.'''
             eval_key, state_key = jax.random.split(self.train_state.rng_key)
             post_img_means, _, prior_img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
@@ -486,9 +486,9 @@ class WorldModelTrainer:
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
-            self._update = jax.pmap(update, axis_name='batch')
-            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='batch')
-            self._eval = jax.pmap(eval, axis_name='batch')
+            self._update = jax.pmap(update, axis_name='i')
+            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='i')
+            self._eval = jax.pmap(eval, axis_name='i')
         else:
             self._update = jax.jit(update)
             self._compute_uncertainty = jax.jit(compute_uncertainty)
