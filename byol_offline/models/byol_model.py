@@ -61,6 +61,7 @@ class ConvWorldModel(hk.Module):
         return deter_states
     
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
+    
     def _onestep_imagine(self, action, state):
         new_state, _ = self._rssm._onestep_prior(action, state)
         img_mean = self._decoder(new_state)
@@ -77,7 +78,11 @@ class ConvWorldModel(hk.Module):
         return img_mean, reward_mean
     
     # ===== things used in training/to define loss function in trainer =====
-    def _dreamer_extras(self, embeds, actions):
+    
+    def _dreamer_forward(self, obs, actions):
+        # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
+        embeds = hk.BatchApply(self._encoder)(obs)
+        
         # always start with init state at zeros
         posts, priors, features = self._rssm(embeds, actions, None)
         # posts: (T, B, dist_dim), priors: (T, B, dist_dim), features: (T, B, feature_dim)
@@ -86,10 +91,8 @@ class ConvWorldModel(hk.Module):
         reward_mean = jnp.squeeze(reward_mean)
         
         return img_mean, reward_mean, posts, priors
-        
-    def __call__(self, obs, actions):
-        # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
-        
+    
+    def _byol_forward(self, obs, actions):
         # first get embeddings
         B = obs.shape[1]
         embeds = hk.BatchApply(self._encoder)(obs)
@@ -105,11 +108,14 @@ class ConvWorldModel(hk.Module):
         latents = self._byol_predictor(deter_states)
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeds
         
-        # === dreamer stuff ===
-        dreamer_extras = self._dreamer_extras(embeds, actions)
-        
         # return
-        return pred_latents, embeds, dreamer_extras
+        return pred_latents, embeds
+        
+    def __call__(self, obs, actions):
+        dreamer_out = self._dreamer_forward(obs, actions)
+        byol_out = self._byol_forward(obs, actions)
+        
+        return dreamer_out, byol_out
 
 class MLPWorldModel(hk.Module):
     '''World model for D4RL tasks. Primarily inspired by MOPO repository.'''
@@ -137,6 +143,7 @@ class MLPWorldModel(hk.Module):
         self._byol_predictor = BYOLPredictor(cfg.repr_dim)
         
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
+    
     def _onestep_imagine(self, action, state):
         new_state, _ = self._rssm._onestep_prior(action, state)
         state_mean = self._decoder(new_state)
@@ -153,7 +160,11 @@ class MLPWorldModel(hk.Module):
         return state_mean, reward_mean
     
     # ===== things used in training/to define loss function in trainer =====
-    def _dreamer_extras(self, embeds, actions):
+    
+    def _dreamer_forward(self, obs, actions):
+        # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
+        
+        embeds = hk.BatchApply(self._encoder)(obs)
         posts, priors, features = self._rssm(embeds, actions, None)
         
         # state + reward prediction
@@ -163,21 +174,7 @@ class MLPWorldModel(hk.Module):
         
         return state_mean, reward_mean, posts, priors
     
-    def _open_gru_rollout(self, actions, state):
-        '''
-        Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state 'state'.
-        
-        Only gets the deterministic part of the output, similar to BYOL-Explore.
-        '''
-        def _scan_fn(carry, act):
-            state = carry
-            new_state, _ = self._rssm._onestep_prior(act, state)
-            return new_state, new_state[..., :self._rssm._deter_dim]
-        
-        _, deter_states = hk.scan(_scan_fn, state, actions)
-        return deter_states
-    
-    def __call__(self, obs, actions):
+    def _byol_forward(self, obs, actions):
         # obs should be of shape (T, B, H, W, C), actions of shape (T, B, action_dim)
         
         # first get embeddings
@@ -195,23 +192,73 @@ class MLPWorldModel(hk.Module):
         latents = hk.BatchApply(self._byol_predictor)(deter_states)
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeds
         
-        # === dreamer stuff ===
-        dreamer_extras = self._dreamer_extras(embeds, actions)
-        
         # return
-        return pred_latents, embeds, dreamer_extras
+        return pred_latents, embeds
+    
+    def _open_gru_rollout(self, actions, state):
+        '''
+        Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state 'state'.
+        
+        Only gets the deterministic part of the output, similar to BYOL-Explore.
+        '''
+        def _scan_fn(carry, act):
+            state = carry
+            new_state, _ = self._rssm._onestep_prior(act, state)
+            return new_state, new_state[..., :self._rssm._deter_dim]
+        
+        _, deter_states = hk.scan(_scan_fn, state, actions)
+        return deter_states
+    
+    def __call__(self, obs, actions):
+        dreamer_out = self._dreamer_forward(obs, actions)
+        byol_out = self._byol_forward(obs, actions)
+        
+        return dreamer_out, byol_out
     
 class WorldModelTrainer:
     '''World model trainer.'''
     def __init__(self, cfg):
         # set up
         if cfg.task in MUJOCO_ENVS:
-            wm_fn = lambda o, a: MLPWorldModel(cfg.d4rl)(o, a)
+            def wm_fn():
+                wm = MLPWorldModel(cfg.d4rl)
+                
+                def init(o, a):
+                    # same as standard forward pass
+                    return wm(o, a)
+                
+                def dreamer_forward(o, a):
+                    return wm._dreamer_forward(o, a)
+                
+                def byol_forward(o, a):
+                    return wm._byol_forward(o, a)
+                
+                def imagine_fn(a, s):
+                    return wm._onestep_imagine(a, s)
+                
+                return init, (dreamer_forward, byol_forward, imagine_fn)
         else:
-            wm_fn = lambda o, a: ConvWorldModel(cfg.vd4rl)(o, a)
+            def wm_fn():
+                wm = ConvWorldModel(cfg.vd4rl)
+                
+                def init(o, a):
+                    # same as standard forward pass
+                    return wm(o, a)
+                
+                def dreamer_forward(o, a):
+                    return wm._dreamer_forward(o, a)
+                
+                def byol_forward(o, a):
+                    return wm._byol_forward(o, a)
+                
+                def imagine_fn(a, s):
+                    return wm._onestep_imagine(a, s)
+                
+                return init, (dreamer_forward, byol_forward, imagine_fn)
         
         # should be ok with byol loss here, as byol loss is regardless deterministic and only depends on deter states
-        wm = hk.transform(wm_fn) # rngs are used in the dreamer section of the model for generation, so cannot use without_apply_rng
+        # rngs are used in the dreamer section of the model for generation, so cannot use without_apply_rng
+        wm = hk.multi_transform(wm_fn)
         
         # params
         key = jax.random.PRNGKey(cfg.seed)
@@ -246,6 +293,9 @@ class WorldModelTrainer:
             wm_opt_state=wm_opt_state,
             rng_key=state_key
         )
+        
+        # hparams and fns to note
+        dreamer_forward, byol_forward, imagine_onestep = wm.apply
         
         ema = cfg.ema
         discrete = cfg.stoch_discrete_dim > 1
@@ -287,10 +337,10 @@ class WorldModelTrainer:
             obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
             action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
             
-            pred_latents, _, _ = wm.apply(wm_params, pred_key, obs_window, action_window)
+            pred_latents, _ = byol_forward(wm_params, pred_key, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
 
-            _, target_latents, _ = wm.apply(target_params, target_key, obs_window, action_window) # (T, B, embed_dim)
+            _, target_latents = byol_forward(target_params, target_key, obs_window, action_window) # (T, B, embed_dim)
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
 
             # normalize latents
@@ -313,8 +363,8 @@ class WorldModelTrainer:
                             reward_seq: jnp.ndarray,
                             key: jax.random.PRNGKey) -> Tuple[jnp.ndarray, Dict]:
             '''Only dreamer loss, and so no need for masking, and can model entire sequence without overlap.'''
-            _, _, dreamer_extras = wm.apply(wm_params, key, obs_seq, action_seq)
-            img_mean, reward_mean, post_stats, prior_stats = dreamer_extras
+            dreamer_out = dreamer_forward(wm_params, key, obs_seq, action_seq)
+            img_mean, reward_mean, post_stats, prior_stats = dreamer_out
             
             img_dist = _get_img_dist(img_mean)
             reward_dist = _get_reward_dist(reward_mean)
@@ -409,14 +459,25 @@ class WorldModelTrainer:
             # losses are of shape (T, B), result of only BYOL loss accumulation
             return jax.lax.stop_gradient(losses)
         
+        def evaluate(obs_seq: jnp.ndarray,
+                     action_seq: jnp.ndarray):
+            # TODO implement eval protocol
+            eval_key, state_key = jax.random.split(self.train_state.rng_key)
+            img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
+            
+            self.train_state._replace(rng_key=state_key)
+            return img_means
+        
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
             self._update = jax.pmap(update, axis_name='batch')
             self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='batch')
+            self._evaluate = jax.pmap(evaluate, axis_name='batch')
         else:
             self._update = jax.jit(update)
             self._compute_uncertainty = jax.jit(compute_uncertainty)
+            self._evaluate = jax.jit(evaluate)
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

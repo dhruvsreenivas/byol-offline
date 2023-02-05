@@ -72,7 +72,7 @@ def test_world_model_module(cfg):
     '''Testing if the world model module apply method works.'''
     # Make sure print statements are enabled in WM __call__ function to print out state when running this method
     key = jax.random.PRNGKey(42)
-    init_key, apply_key, key1, key2 = jax.random.split(key, 4)
+    init_key, dreamer_key, byol_key, key1, key2 = jax.random.split(key, 5)
     
     cfg.obs_shape = (64, 64, 9)
     cfg.action_shape = (6,)
@@ -82,16 +82,37 @@ def test_world_model_module(cfg):
     dummy_actions = jax.random.normal(key2, shape=(10, 50, 6))
     
     # world model creation
-    wm_fn = lambda o, a: ConvWorldModel(cfg.byol.vd4rl)(o, a)
-    wm = hk.transform(wm_fn)
+    def wm_fn():
+        wm = ConvWorldModel(cfg.byol.vd4rl)
+        
+        def init(o, a):
+            # same as standard forward pass
+            return wm(o, a)
+        
+        def dreamer_forward(o, a):
+            return wm(o, a)
+        
+        def byol_forward(o, a):
+            return wm._byol_extras(o, a)
+        
+        def imagine_fn(a, s):
+            return wm._onestep_imagine(a, s)
+        
+        return init, (dreamer_forward, byol_forward, imagine_fn)
+    
+    wm = hk.multi_transform(wm_fn)
     params = wm.init(init_key, dummy_obs, dummy_actions)
 
-    pred_latents, embeds, extras = wm.apply(params, apply_key, dummy_obs, dummy_actions)
+    dreamer_forward, byol_forward, _ = wm.apply
+    pred_latents, embeds = byol_forward(params, dreamer_key, dummy_obs, dummy_actions)
+    dreamer_stuff = dreamer_forward(params, byol_key, dummy_obs, dummy_actions)
+    
     # initial checks
-    print('=== shape checks ===')
+    print('=== shape checks (byol) ===')
     print(pred_latents.shape)
     print(embeds.shape)
-    for e in extras:
+    print('=== shape checks (dreamer) ===')
+    for e in dreamer_stuff:
         print(e.shape)
 
 @hydra.main(config_path='cfgs', config_name='config')
@@ -395,4 +416,5 @@ def test_rl_algo(cfg):
     wandb.finish()
     
 if __name__ == '__main__':
+    # test_world_model_module()
     test_world_model_update()
