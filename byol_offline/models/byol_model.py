@@ -420,7 +420,7 @@ class WorldModelTrainer:
             dreamer_loss, metrics = dreamer_loss_fn(wm_params, obs_seq, action_seq, reward_seq, dreamer_key)
             metrics['byol'] = byol_loss
             
-            total_loss = byol_loss + beta * dreamer_loss
+            total_loss = dreamer_loss + beta * byol_loss # switching it so model focuses more on dreamer
             metrics['total'] = total_loss
             return total_loss, metrics
         
@@ -477,11 +477,11 @@ class WorldModelTrainer:
             eval_key, state_key = jax.random.split(self.train_state.rng_key)
             post_img_means, _, prior_img_means, _, _, _ = dreamer_forward(self.train_state.wm_params, eval_key, obs_seq, action_seq)
             img_means = jnp.where(post, post_img_means, prior_img_means)
-            img_means = ((img_means + 0.5) * 255.0).astype(np.uint8)
-            img_means = img_means[:, :, :, :3] # just the first image
+            img_means = (img_means + 0.5) * 255.0
+            img_means = jnp.squeeze(img_means[:, :, :, :, :3]) # just the first image
             
             new_train_state = self.train_state._replace(rng_key=state_key)
-            return new_train_state, img_means
+            return new_train_state, jax.lax.stop_gradient(img_means)
         
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # auto jits so don't need to do jax.jit before pmap

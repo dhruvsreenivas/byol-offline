@@ -16,7 +16,7 @@ def episode_len(episode):
     return next(iter(episode.values())).shape[0] - 1
             
 def load_episode(fn, relevant_keys):
-    # Loads episode and only grabs relevant
+    # Loads episode and only grabs relevant info
     with fn.open("rb") as f:
         episode = np.load(f)
         episode = {k: episode[k] for k in relevant_keys}

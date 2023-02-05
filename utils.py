@@ -4,14 +4,19 @@ import d4rl
 import jax.numpy as jnp
 import numpy as np
 
-def get_test_traj(path, frame_stack=3, seq_len=10):
+def get_random_traj(path):
     traj_fns = list(path.glob('*.npz'))
     traj_fn = np.random.choice(traj_fns)
     
     with traj_fn.open('rb') as f:
         episode = np.load(f)
+        episode = {k: episode[k] for k in ['image', 'action']}
+        return episode
+
+def get_test_traj(path, frame_stack=3, seq_len=10):
+    episode = get_random_traj(path)
     
-    episode_len = next(iter(episode.values())).shape[0] - 1
+    episode_len = episode['image'].shape[0] - 1 # should be 501 - 1 = 500
     start_idx = np.random.randint(0, episode_len - seq_len)
     
     obs = []
@@ -35,10 +40,10 @@ def get_test_traj(path, frame_stack=3, seq_len=10):
         action = episode['action'][i].astype(np.float32)
         actions.append(action)
         
-    obs = np.stack(obs)
-    actions = np.stack(actions)
-    first_frames = np.stack(first_frames) # should be uint8 here
-    return obs, actions
+    obs = np.expand_dims(np.stack(obs), 1) # (T, 1, 64, 64, 9)
+    actions = np.expand_dims(np.stack(actions), 1) # (T, 1, 6)
+    first_frames = np.stack(first_frames).astype(np.uint8) # should be uint8 here, (T, 64, 64, 3)
+    return obs, actions, first_frames
 
 class Until:
     def __init__(self, until, action_repeat=1):

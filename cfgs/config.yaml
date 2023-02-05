@@ -10,7 +10,7 @@ train_byol: false
 
 # environment parameters
 img_size: 64
-frame_stack: 1
+frame_stack: 3
 action_repeat: 2
 
 # world model training + RND model training
@@ -82,7 +82,7 @@ byol:
   # dreamer args
   stoch_dim: 32
   stoch_discrete_dim: 32
-  beta: 0.5
+  beta: 1.0
 
   vd4rl:
     obs_shape: ${obs_shape}

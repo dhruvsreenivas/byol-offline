@@ -8,6 +8,7 @@ import haiku as hk
 import hydra
 import gym
 from pathlib import Path
+from hydra.utils import to_absolute_path
 from tqdm import trange
 import wandb
 import time
@@ -18,9 +19,17 @@ from byol_offline.networks.rnn import *
 from byol_offline.models import *
 from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
-from utils import get_gym_dataset, make_gym_env, print_dict
+from utils import get_gym_dataset, make_gym_env, print_dict, get_test_traj
 
 '''Various testing functions to make sure core machinery works.'''
+
+def test_get_test_traj():
+    data_dir = Path(to_absolute_path('offline_data')) / 'dmc' / 'cheetah_run' / 'med_exp'
+    
+    obs, actions, first_frames = get_test_traj(data_dir, frame_stack=3, seq_len=10)
+    print(f'image shape: {obs.shape}')
+    print(f'actions shape: {actions.shape}')
+    print(f'first frames shape: {first_frames.shape}')
 
 def test_encoding_decoding(dreamer=True):
     shape = (64, 64, 9)
@@ -417,4 +426,6 @@ def test_rl_algo(cfg):
     
 if __name__ == '__main__':
     # test_world_model_module()
-    test_world_model_update()
+    # test_world_model_update()
+    # =========================
+    test_get_test_traj()

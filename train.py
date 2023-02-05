@@ -216,22 +216,26 @@ class Workspace:
     
     def eval_byol(self):
         '''Evaluates DMC model by decoding from the posterior of some test trajectory in the dataset, and seeing how well the model can reconstruct the images.'''
-        obs, acts, first_frames = get_test_traj(self.offline_dir)
+        obs, acts, first_frames = get_test_traj(self.offline_dir, frame_stack=self.cfg.frame_stack, seq_len=self.cfg.seq_len)
         new_state, post_img_means = self.byol_trainer._eval(obs, acts, post=True)
         new_state, prior_img_means = self.byol_trainer._eval(obs, acts, post=False)
         
         self.byol_trainer.train_state = new_state
         
+        post_img_means = np.asarray(post_img_means).astype(np.uint8)
+        prior_img_means = np.asarray(prior_img_means).astype(np.uint8)
+        print(f'=== post/prior/actual shapes: {post_img_means.shape}, {prior_img_means.shape}, {first_frames.shape} ===')
         T = post_img_means.shape[0]
         assert prior_img_means.shape[0] == T and first_frames.shape[0] == T, 'not the same amount of things to log!'
+        
         if self.cfg.wandb:
             log_pred_post = [
-                Image.fromarray(post_img_means[x])
+                Image.fromarray(post_img_means[x], mode='RGB')
                 for x in range(0, T, 5)
             ]
             
             log_pred_prior = [
-                Image.fromarray(prior_img_means[x])
+                Image.fromarray(prior_img_means[x], mode='RGB')
                 for x in range(0, T, 5)
             ]
             
