@@ -218,8 +218,9 @@ class Workspace:
         '''Evaluates DMC model by decoding from the posterior of some test trajectory in the dataset, and seeing how well the model can reconstruct the images.'''
         obs, acts, first_frames = get_test_traj(self.offline_dir, frame_stack=self.cfg.frame_stack, seq_len=self.cfg.seq_len)
         new_state, post_img_means = self.byol_trainer._eval(obs, acts, post=True)
-        new_state, prior_img_means = self.byol_trainer._eval(obs, acts, post=False)
+        self.byol_trainer.train_state = new_state
         
+        new_state, prior_img_means = self.byol_trainer._eval(obs, acts, post=False)
         self.byol_trainer.train_state = new_state
         
         post_img_means = np.asarray(post_img_means).astype(np.uint8)
