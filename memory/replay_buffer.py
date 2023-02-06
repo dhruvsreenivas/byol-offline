@@ -349,7 +349,8 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
 def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequenceReplayBuffer],
                              max_steps: int,
                              batch_size: int,
-                             prefetch: bool = True):
+                             prefetch: bool = True,
+                             cache: bool = True):
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
@@ -363,13 +364,16 @@ def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequen
         tf.TensorSpec(shape=done_shape, dtype=done_type)
     )
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
-    dataset = dataset.batch(batch_size, drop_remainder=True)
 
     if isinstance(buffer, VD4RLSequenceReplayBuffer):
         dataset = dataset.map(transpose_fn_img)
     else:
         dataset = dataset.map(transpose_fn_state)
     
+    if cache:
+        dataset = dataset.cache()
+    
+    dataset = dataset.batch(batch_size, drop_remainder=True)
     if prefetch:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
