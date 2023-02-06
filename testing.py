@@ -171,21 +171,21 @@ def test_sampler_dataloading(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
     if d4rl:
         if byol:
-            buffer = D4RLSequenceReplayBuffer('hopper', 'medium', 25)
-            dataloader = byol_sampling_dataloader(buffer, max_steps=200, batch_size=20)
+            buffer = D4RLSequenceReplayBuffer('hopper', 'medium', 10)
+            dataloader = byol_sampling_dataloader(buffer, max_steps=10000, batch_size=50)
         else:
             buffer = D4RLTransitionReplayBuffer('hopper', 'medium')
             dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     else:
         data_path = Path('./offline_data/dmc/cheetah_run/med_exp')
         if byol:
-            buffer = VD4RLSequenceReplayBuffer(data_path, 25)
-            dataloader = byol_sampling_dataloader(buffer, max_steps=200, batch_size=20)
+            buffer = VD4RLSequenceReplayBuffer(data_path, 10)
+            dataloader = byol_sampling_dataloader(buffer, max_steps=10000, batch_size=50)
         else:
             buffer = VD4RLTransitionReplayBuffer(data_path)
             dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     
-    for epoch in range(10):
+    for epoch in range(25):
         print(f'starting epoch {epoch + 1}')
         print('*' * 50)
         for batch in dataloader:
@@ -429,3 +429,5 @@ if __name__ == '__main__':
     # test_world_model_update()
     # =========================
     test_get_test_traj()
+    # =========================
+    test_sampler_dataloading(d4rl=False, byol=True)

@@ -14,7 +14,7 @@ Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 
 def episode_len(episode):
     # subtract -1 because the dummy first transition
     return next(iter(episode.values())).shape[0] - 1
-            
+    
 def load_episode(fn, relevant_keys):
     # Loads episode and only grabs relevant info
     with fn.open("rb") as f:
@@ -80,6 +80,8 @@ def relabel_dones_d4rl(dataset):
     
     dataset['terminals'] = dones_float
     return dataset
+
+# ====================================================== VD4RL SETUP ======================================================
 
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
@@ -244,6 +246,8 @@ class VD4RLTransitionReplayBuffer:
         
         return obs, action, reward, next_obs, done
     
+# ====================================================== D4RL SETUP ======================================================
+    
 class D4RLSequenceReplayBuffer:
     def __init__(self, env_name, capability, seq_len, clip_actions=True, normalize=True, normalize_reward=False):
         self.dataset = get_gym_dataset(env_name, capability, q_learning=True)
@@ -313,6 +317,8 @@ class D4RLTransitionReplayBuffer:
             next_obs = (next_obs - self.next_state_mean) / self.next_state_scale
         
         return obs, action, reward, next_obs, done, idx
+    
+# ====================================================== GENERAL ======================================================
         
 def generator_fn(buffer, max_steps=None):
     if max_steps is not None:
