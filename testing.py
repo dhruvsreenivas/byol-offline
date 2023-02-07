@@ -179,23 +179,41 @@ def test_sampler_dataloading(d4rl=True, byol=True):
     else:
         data_path = Path('./offline_data/dmc/cheetah_run/med_exp')
         if byol:
-            buffer = VD4RLSequenceReplayBuffer(data_path, 10)
+            buffer = VD4RLSequenceReplayBuffer(data_path, 10, frame_stack=3)
             dataloader = byol_sampling_dataloader(buffer, max_steps=10000, batch_size=50)
         else:
-            buffer = VD4RLTransitionReplayBuffer(data_path)
+            buffer = VD4RLTransitionReplayBuffer(data_path, frame_stack=3)
             dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
     
-    for epoch in range(25):
+    for epoch in range(1000):
+        count = 0
         print(f'starting epoch {epoch + 1}')
         print('*' * 50)
+        o_shape, a_shape, r_shape, no_shape, d_shape = None, None, None, None, None
         for batch in dataloader:
             obs, action, reward, next_obs, done = batch
-            print(f'obs info: shape: {obs.shape}, dtype: {obs.dtype}')
-            print(f'action info: shape: {action.shape}, dtype: {action.dtype}')
-            print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
-            print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
-            print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
-            print('*' * 50)
+            
+            if count == 0:
+                print(f'obs info: shape: {obs.shape}, dtype: {obs.dtype}')
+                print(f'action info: shape: {action.shape}, dtype: {action.dtype}')
+                print(f'reward info: shape: {reward.shape}, dtype: {reward.dtype}')
+                print(f'next obs info: shape: {next_obs.shape}, dtype: {next_obs.dtype}')
+                print(f'done info: shape: {done.shape}, dtype: {done.dtype}')
+                print('*' * 50)
+                
+                o_shape = obs.shape
+                a_shape = action.shape
+                r_shape = reward.shape
+                no_shape = next_obs.shape
+                d_shape = done.shape
+            else:
+                assert obs.shape == o_shape
+                assert action.shape == a_shape
+                assert reward.shape == r_shape
+                assert next_obs.shape == no_shape
+                assert done.shape == d_shape
+            
+            count += 1
             
 def batch_eq(batch1, batch2):
     obs1, act1, rew1, nobs1, d1 = batch1
@@ -428,6 +446,6 @@ if __name__ == '__main__':
     # test_world_model_module()
     # test_world_model_update()
     # =========================
-    test_get_test_traj()
+    # test_get_test_traj()
     # =========================
     test_sampler_dataloading(d4rl=False, byol=True)

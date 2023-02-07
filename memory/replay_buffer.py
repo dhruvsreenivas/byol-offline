@@ -138,6 +138,7 @@ class VD4RLSequenceReplayBuffer:
         rewards = []
         next_obs = []
         dones = []
+        
         for i in range(idx, idx + self._seq_len):
             # current obs
             if i < self._frame_stack - 1:
@@ -364,6 +365,7 @@ def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequen
         tf.TensorSpec(shape=done_shape, dtype=done_type)
     )
     dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
 
     if isinstance(buffer, VD4RLSequenceReplayBuffer):
         dataset = dataset.map(transpose_fn_img)
@@ -373,7 +375,6 @@ def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequen
     if cache:
         dataset = dataset.cache()
     
-    dataset = dataset.batch(batch_size, drop_remainder=True)
     if prefetch:
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
