@@ -3,6 +3,21 @@ from gym.wrappers.atari_preprocessing import AtariPreprocessing
 import d4rl
 import jax.numpy as jnp
 import numpy as np
+import torch
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+
+def to_seq_np(batch):
+    '''Converts batches into sequences.'''
+    def b2s(x):
+        assert isinstance(x, torch.Tensor)
+        return x.transpose(0, 1).numpy()
+
+    return (b2s(x) for x in batch)
 
 def get_random_traj(path):
     traj_fns = list(path.glob('*.npz'))

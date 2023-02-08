@@ -116,7 +116,7 @@ class BC:
             act_update, new_act_opt_state = actor_opt.update(actor_grads, train_state.opt_state)
             new_actor_params = optax.apply_updates(train_state.params, act_update)
             
-            new_train_state = train_state._replace(
+            new_train_state = BCTrainState(
                 params=new_actor_params,
                 opt_state=new_act_opt_state,
                 encoder_params=new_enc_params,

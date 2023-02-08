@@ -19,7 +19,7 @@ from byol_offline.networks.rnn import *
 from byol_offline.models import *
 from byol_offline.agents.td3 import TD3
 from memory.replay_buffer import *
-from utils import get_gym_dataset, make_gym_env, print_dict, get_test_traj
+from utils import get_gym_dataset, make_gym_env, print_dict, get_test_traj, to_seq_np
 
 '''Various testing functions to make sure core machinery works.'''
 
@@ -129,6 +129,7 @@ def test_world_model_update(cfg):
     '''Testing if the world model loss function/update scheme works.'''
     cfg.obs_shape = (64, 64, 9)
     cfg.action_shape = (6,)
+    # cfg.pmap = True # for now just test pmapping abilities
     
     wm_trainer = WorldModelTrainer(cfg.byol)
     
@@ -167,23 +168,23 @@ def test_world_model_update(cfg):
     secs_2 = secs_2 % 60
     print(f'total amount of time for 1 update after jit compilation: {mins_2} mins & {secs_2} secs.')
 
-def test_sampler_dataloading(d4rl=True, byol=True):
+def test_sampler_dataloading_tf(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
     if d4rl:
         if byol:
             buffer = D4RLSequenceReplayBuffer('hopper', 'medium', 10)
-            dataloader = byol_sampling_dataloader(buffer, max_steps=10000, batch_size=50)
+            dataloader = byol_sampling_dataloader_tf(buffer, max_steps=10000, batch_size=50)
         else:
             buffer = D4RLTransitionReplayBuffer('hopper', 'medium')
-            dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = rnd_sampling_dataloader_tf(buffer, max_steps=200, batch_size=20)
     else:
         data_path = Path('./offline_data/dmc/cheetah_run/med_exp')
         if byol:
             buffer = VD4RLSequenceReplayBuffer(data_path, 10, frame_stack=3)
-            dataloader = byol_sampling_dataloader(buffer, max_steps=10000, batch_size=50)
+            dataloader = byol_sampling_dataloader_tf(buffer, max_steps=10000, batch_size=50)
         else:
             buffer = VD4RLTransitionReplayBuffer(data_path, frame_stack=3)
-            dataloader = rnd_sampling_dataloader(buffer, max_steps=200, batch_size=20)
+            dataloader = rnd_sampling_dataloader_tf(buffer, max_steps=200, batch_size=20)
     
     for epoch in range(1000):
         count = 0
@@ -214,7 +215,24 @@ def test_sampler_dataloading(d4rl=True, byol=True):
                 assert done.shape == d_shape
             
             count += 1
-            
+
+def test_sampler_dataloading_torch():
+    print('=== Testing dataloading with PyTorch ===')
+    data_path = Path('./offline_data/dmc/cheetah_run/med_exp')
+    dloader = byol_sampling_dataloader_torch(data_path, seq_len=10, max_steps=10000, batch_size=50, frame_stack=3)
+    
+    print('*' * 30)
+    for _ in range(10):
+        batch = next(iter(dloader))
+        
+        obs, action, reward, next_obs, done = batch
+        print(f'obs shape: {obs.shape}')
+        print(f'action shape: {action.shape}')
+        print(f'reward shape: {reward.shape}')
+        print(f'next_obs shape: {next_obs.shape}')
+        print(f'done shape: {done.shape}')
+        print('*' * 30)
+        
 def batch_eq(batch1, batch2):
     obs1, act1, rew1, nobs1, d1 = batch1
     obs2, act2, rew2, nobs2, d2 = batch2
@@ -448,4 +466,5 @@ if __name__ == '__main__':
     # =========================
     # test_get_test_traj()
     # =========================
-    test_sampler_dataloading(d4rl=False, byol=True)
+    # test_sampler_dataloading_tf(d4rl=False, byol=True)
+    test_sampler_dataloading_torch()

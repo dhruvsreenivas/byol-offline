@@ -4,10 +4,14 @@ import random
 from utils import get_gym_dataset
 from collections import namedtuple
 from typing import Union
+from functools import partial
 
 # tensorflow dataset utilities
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+# pytorch dataset utilities because TFDS sucks with mem alloc
+from torch.utils.data import IterableDataset, DataLoader
 
 Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 'dones'])
 
@@ -347,11 +351,13 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
     done = tf.transpose(done, (1, 0))
     return obs, action, reward, next_obs, done
 
-def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequenceReplayBuffer],
-                             max_steps: int,
-                             batch_size: int,
-                             prefetch: bool = True,
-                             cache: bool = True):
+# ====================================================== TENSORFLOW ======================================================
+
+def byol_sampling_dataloader_tf(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequenceReplayBuffer],
+                                max_steps: int,
+                                batch_size: int,
+                                prefetch: bool = True,
+                                cache: bool = True):
     obs, action, reward, next_obs, done = buffer._sample()
     obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
     obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
@@ -380,10 +386,10 @@ def byol_sampling_dataloader(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequen
     
     return tfds.as_numpy(dataset)
 
-def rnd_sampling_dataloader(buffer: Union[VD4RLTransitionReplayBuffer, D4RLTransitionReplayBuffer],
-                            max_steps: int,
-                            batch_size: int,
-                            prefetch: bool = True):
+def rnd_sampling_dataloader_tf(buffer: Union[VD4RLTransitionReplayBuffer, D4RLTransitionReplayBuffer],
+                               max_steps: int,
+                               batch_size: int,
+                               prefetch: bool = True):
     
     obs, action, reward, next_obs, done = buffer._sample()
     done = np.float32(done)
@@ -446,6 +452,108 @@ def d4rl_rnd_iterative_dataloader(dataset_name, dataset_capability, batch_size, 
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
     return tfds.as_numpy(dataset), stats
+
+# ====================================================== PYTORCH ======================================================
+
+def numpy_collate(batch, stack_dim=0):
+    if isinstance(batch[0], np.ndarray):
+        return np.stack(batch, stack_dim)
+    elif isinstance(batch[0], (tuple, list)):
+        transposed = zip(*batch)
+        return [numpy_collate(samples, stack_dim) for samples in transposed]
+    else:
+        return np.array(batch)
+
+class VD4RLSequenceDataset(IterableDataset):
+    def __init__(self,
+                 data_dir,
+                 seq_len,
+                 max_steps,
+                 frame_stack = 3):
+        super().__init__()
+        self.buffer = VD4RLSequenceReplayBuffer(data_dir, seq_len, frame_stack)
+        self.max_steps = max_steps
+        
+    def _sample(self):
+        return self.buffer._sample()
+    
+    def __iter__(self):
+        if self.max_steps is not None:
+            for _ in range(self.max_steps):
+                yield self._sample()
+        else:
+            while True:
+                yield self._sample()
+                
+class VD4RLTransitionDataset(IterableDataset):
+    def __init__(self,
+                 data_dir,
+                 max_steps,
+                 frame_stack = 3):
+        super().__init__()
+        self.buffer = VD4RLTransitionReplayBuffer(data_dir, frame_stack)
+        self.max_steps = max_steps
+        
+    def _sample(self):
+        return self.buffer._sample()
+    
+    def __iter__(self):
+        if self.max_steps is not None:
+            for _ in range(self.max_steps):
+                yield self._sample()
+        else:
+            while True:
+                yield self._sample()
+                
+class NumpyLoader(DataLoader):
+    def __init__(self,
+                 dataset,
+                 batch_size=1,
+                 stack_dim=1,
+                 shuffle=False,
+                 sampler=None,
+                 batch_sampler=None,
+                 num_workers=0,
+                 pin_memory=False,
+                 drop_last=False,
+                 timeout=0,
+                 worker_init_fn=None):
+        
+        super(self.__class__, self).__init__(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            collate_fn=partial(numpy_collate, stack_dim=stack_dim),
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+            timeout=timeout,
+            worker_init_fn=worker_init_fn
+        )
+        
+def byol_sampling_dataloader_torch(data_dir, seq_len, max_steps, batch_size, frame_stack = 3):
+    dset = VD4RLSequenceDataset(data_dir, seq_len, max_steps, frame_stack)
+    dloader = NumpyLoader(
+        dset,
+        batch_size=batch_size,
+        stack_dim=1,
+        pin_memory=True
+    )
+    return dloader
+
+def rnd_sampling_dataloader_torch(data_dir, max_steps, batch_size, frame_stack = 3):
+    dset = VD4RLTransitionDataset(data_dir, max_steps, frame_stack)
+    dloader = NumpyLoader(
+        dset,
+        batch_size=batch_size,
+        stack_dim=0,
+        pin_memory=True
+    )
+    return dloader
+
+# ====================================================== NORMAL REPLAY BUFFER ======================================================
 
 class ReplayBuffer:
     '''Normal replay buffer, used in testing online RL algorithms.'''

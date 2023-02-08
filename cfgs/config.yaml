@@ -3,10 +3,12 @@ defaults:
   - task@_global_: ???
   - learner@_global_: ddpg
 
+# standard params
 project_name: ???
 seed: 0
 level: med_exp
 train_byol: false
+torch_data: false
 
 # environment parameters
 img_size: 64
@@ -61,14 +63,15 @@ model_save_every: 100
 model_eval_every: 100
 
 # agent training params (common for all)
-reward_min: ???
-reward_max: ???
+reward_min: -1.0
+reward_max: 1.0
 penalize: true
 penalize_q: false
 
 # parallelization
 pmap: false
 
+# BYOL-Explore + Dreamer world model config
 byol:
   task: ${task}
   seed: ${seed}
@@ -103,6 +106,7 @@ byol:
     gru_hidden_size: 64
     stoch_discrete_dim: ${byol.stoch_discrete_dim}
 
+# RND model config
 rnd:
   task: ${task}
   seed: ${seed}
@@ -124,6 +128,7 @@ rnd:
     hidden_dim: 256
     repr_dim: 50
 
+# Autoencoder config
 ae:
   task: ${task}
   seed: ${seed}
@@ -150,14 +155,6 @@ simple_dynamics:
   lr: 1e-4
   train_for_diff: true
   transform: ${transform}
-
-bc:
-  obs_shape: ${obs_shape}
-  action_shape: ${action_shape}
-  seed: ${seed}
-  hidden_dim: ${hidden_dim}
-  optim: adam
-  lr: 1e-4
 
 hydra:
   run:

@@ -23,11 +23,14 @@ class Workspace:
         
         self.cfg = cfg
         self.setup()
-        print('Finished setting up')
+        print('=== Finished setting up!! ===')
         
         self.global_step = 0
     
     def setup(self):
+        # seed
+        set_seed(self.cfg.seed)
+        
         # offline directory
         if self.cfg.task not in MUJOCO_ENVS:
             is_atari = self.cfg.task in ATARI_ENVS
@@ -85,88 +88,98 @@ class Workspace:
             self.cfg.action_shape = self.train_env.action_spec().shape
         
         # RND model stuff
-        self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
-        if self.cfg.load_model and self.cfg.aug == 'rnd':
-            model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl'
-            self.rnd_trainer.load(model_path)
+        if not self.cfg.train_byol:
+            self.rnd_trainer = RNDModelTrainer(self.cfg.rnd)
+            if self.cfg.load_model and self.cfg.aug == 'rnd':
+                model_path = self.pretrained_rnd_dir / f'rnd_{self.cfg.model_train_epochs}.pkl'
+                self.rnd_trainer.load(model_path)
+        else:
+            self.rnd_trainer = None
 
         # BYOL model stuff
-        self.byol_trainer = WorldModelTrainer(self.cfg.byol)
-        if self.cfg.load_model and self.cfg.aug == 'byol':
-            model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl'
-            self.byol_trainer.load(model_path)
+        if self.cfg.train_byol:
+            self.byol_trainer = WorldModelTrainer(self.cfg.byol)
+            if self.cfg.load_model and self.cfg.aug == 'byol':
+                model_path = self.pretrained_byol_dir / f'byol_{self.cfg.model_train_epochs}.pkl'
+                self.byol_trainer.load(model_path)
+        else:
+            self.byol_trainer = None
             
         # RND dataloader
-        if self.cfg.sample_batches:
-            if self.cfg.task not in MUJOCO_ENVS:
-                rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
+        if not self.cfg.train_byol:
+            if self.cfg.sample_batches:
+                if self.cfg.task not in MUJOCO_ENVS:
+                    rnd_buffer = VD4RLTransitionReplayBuffer(self.offline_dir, self.cfg.frame_stack)
+                    
+                    # standard reward min + max
+                    self.cfg.reward_min = -1.0
+                    self.cfg.reward_max = 1.0
+                else:
+                    lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+                    rnd_buffer = D4RLTransitionReplayBuffer(
+                        self.cfg.task,
+                        lvl,
+                        normalize=self.cfg.normalize_inputs,
+                        normalize_reward=self.cfg.normalize_inputs
+                    )
+                    if self.cfg.normalize_inputs:
+                        self.dataset_stats = (
+                            rnd_buffer.state_mean,
+                            rnd_buffer.action_mean,
+                            rnd_buffer.next_state_mean,
+                            rnd_buffer.state_scale,
+                            rnd_buffer.action_scale,
+                            rnd_buffer.next_state_scale
+                        )
+                        # set reward min + max
+                        self.cfg.reward_min = float(rnd_buffer.reward_min)
+                        self.cfg.reward_max = float(rnd_buffer.reward_max)
                 
-                # standard reward min + max
-                self.cfg.reward_min = -1.0
-                self.cfg.reward_max = 1.0
+                self.rnd_dataloader = rnd_sampling_dataloader_tf(
+                    rnd_buffer,
+                    self.cfg.max_steps,
+                    self.cfg.model_batch_size
+                )
             else:
+                assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-                rnd_buffer = D4RLTransitionReplayBuffer(
+                self.rnd_dataloader, stats = d4rl_rnd_iterative_dataloader(
                     self.cfg.task,
                     lvl,
+                    self.cfg.model_batch_size,
+                    normalize=self.cfg.normalize_inputs,
+                    state_only=self.cfg.normalize_state_only
+                )
+                self.dataset_stats = stats
+                
+                # set reward max + min
+                self.cfg.reward_min = float(stats[-1][0])
+                self.cfg.reward_max = float(stats[-1][1])
+        else:
+            # BYOL dataloader
+            if self.cfg.task not in MUJOCO_ENVS:
+                byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
+            else:
+                lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
+                byol_buffer = D4RLSequenceReplayBuffer(
+                    self.cfg.task,
+                    lvl,
+                    self.cfg.seq_len,
                     normalize=self.cfg.normalize_inputs,
                     normalize_reward=self.cfg.normalize_inputs
                 )
-                if self.cfg.normalize_inputs:
-                    self.dataset_stats = (
-                        rnd_buffer.state_mean,
-                        rnd_buffer.action_mean,
-                        rnd_buffer.next_state_mean,
-                        rnd_buffer.state_scale,
-                        rnd_buffer.action_scale,
-                        rnd_buffer.next_state_scale
-                    )
-                    # set reward min + max
-                    self.cfg.reward_min = float(rnd_buffer.reward_min)
-                    self.cfg.reward_max = float(rnd_buffer.reward_max)
+                # already got stats by this point so we're good
             
-            self.rnd_dataloader = rnd_sampling_dataloader(
-                rnd_buffer,
-                self.cfg.max_steps,
-                self.cfg.model_batch_size
-            )
-        else:
-            assert self.cfg.task in MUJOCO_ENVS, 'Do not currently have iterative support for DMC tasks.'
-            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            self.rnd_dataloader, stats = d4rl_rnd_iterative_dataloader(
-                self.cfg.task,
-                lvl,
-                self.cfg.model_batch_size,
-                normalize=self.cfg.normalize_inputs,
-                state_only=self.cfg.normalize_state_only
-            )
-            self.dataset_stats = stats
-            
-            # set reward max + min
-            self.cfg.reward_min = float(stats[-1][0])
-            self.cfg.reward_max = float(stats[-1][1])
-        
-        # BYOL dataloader
-        if self.cfg.task not in MUJOCO_ENVS:
-            byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
-        else:
-            lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
-            byol_buffer = D4RLSequenceReplayBuffer(
-                self.cfg.task,
-                lvl,
-                self.cfg.seq_len,
-                normalize=self.cfg.normalize_inputs,
-                normalize_reward=self.cfg.normalize_inputs
-            )
-            # already got stats by this point so we're good
-            
-        self.byol_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+            if self.cfg.torch_data:
+                self.byol_dataloader = byol_sampling_dataloader_torch(self.offline_dir, self.cfg.seq_len, self.cfg.max_steps, self.cfg.model_batch_size, self.cfg.frame_stack)
+            else:
+                self.byol_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # VAE model + dataloader (only for mujoco envs)
         if self.cfg.task in MUJOCO_ENVS:
             self.ae_trainer = AETrainer(self.cfg.ae)
             if self.cfg.sample_batches:
-                self.ae_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+                self.ae_dataloader = rnd_sampling_dataloader_tf(rnd_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 self.ae_dataloader, _ = d4rl_rnd_iterative_dataloader(
@@ -179,10 +192,13 @@ class Workspace:
 
         # RL agent dataloader
         if self.cfg.train_byol:
-            self.agent_dataloader = byol_sampling_dataloader(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+            if self.cfg.torch_data:
+                self.agent_dataloader = byol_sampling_dataloader_torch(self.offline_dir, self.cfg.seq_len, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size, self.cfg.frame_stack)
+            else:
+                self.agent_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         else:
             if self.cfg.sample_batches:
-                self.agent_dataloader = rnd_sampling_dataloader(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+                self.agent_dataloader = rnd_sampling_dataloader_tf(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 self.agent_dataloader, _ = d4rl_rnd_iterative_dataloader(
@@ -256,6 +272,8 @@ class Workspace:
     
     def train_byol(self):
         '''Train BYOL-Explore latent world model offline.'''
+        assert self.cfg.train_byol, 'training BYOL, not RND'
+        
         save_every = Every(self.cfg.model_save_every)
         eval_every = Every(self.cfg.model_eval_every)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
@@ -283,6 +301,8 @@ class Workspace:
                 
     def train_rnd(self):
         '''Train RND model offline.'''
+        assert not self.cfg.train_byol, 'training RND, not BYOL'
+        
         save_every = Every(self.cfg.model_save_every)
         for epoch in trange(1, self.cfg.model_train_epochs + 1):
             epoch_metrics = defaultdict(AverageMeter)
@@ -492,7 +512,7 @@ class Workspace:
                 print_dict(log_dump)
             
             # save when necessary
-            if self.cfg.save_model and save_every(epoch) == 0:
+            if self.cfg.save_model and save_every(epoch):
                 model_path = self.agent_dir / f'agent_{epoch}.pkl'
                 self.agent.save(model_path)
 
@@ -541,14 +561,14 @@ class Workspace:
 def main(cfg):
     workspace = Workspace(cfg)
     
-    print('=' * 28)
+    print('=' * 72)
     from jax.lib import xla_bridge
-    print(f'Experiment is running on {xla_bridge.get_backend().platform}')
-    print('=' * 28)
+    print(f'Experiment is running on {xla_bridge.get_backend().platform}, specifically a {jax.devices()[0].device_kind}.')
+    print('=' * 72)
     
     entity = 'dhruv_sreenivas'
     project_name = cfg.project_name
-    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now().strftime("%Y%m%dT%H")
     import sys
 
     name = f"{ts}"
