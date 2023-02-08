@@ -269,6 +269,14 @@ class WorldModelTrainer:
         # rngs are used in the dreamer section of the model for generation, so cannot use without_apply_rng
         wm = hk.multi_transform(wm_fn)
         
+        # optimizer
+        if cfg.optim == 'adam':
+            wm_opt = optax.adam(cfg.lr)
+        elif cfg.optim == 'adamw':
+            wm_opt = optax.adamw(cfg.lr)
+        else:
+            wm_opt = optax.sgd(cfg.lr, momentum=0.9)
+        
         # params
         key = jax.random.PRNGKey(cfg.seed)
         
@@ -276,14 +284,6 @@ class WorldModelTrainer:
             init_key, target_key, state_key = jax.random.split(k, 3)
             wm_params = wm.init(init_key, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
             target_params = wm.init(target_key, seq_batched_zeros_like(cfg.obs_shape), seq_batched_zeros_like(cfg.action_shape))
-            
-            # optimizer
-            if cfg.optim == 'adam':
-                wm_opt = optax.adam(cfg.lr)
-            elif cfg.optim == 'adamw':
-                wm_opt = optax.adamw(cfg.lr)
-            else:
-                wm_opt = optax.sgd(cfg.lr, momentum=0.9)
             
             wm_opt_state = wm_opt.init(wm_params)
             
