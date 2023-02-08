@@ -138,11 +138,12 @@ def relabel_dones_d4rl(dataset):
 
 class VD4RLSequenceReplayBuffer:
     '''Replay buffer used to sample sequences of data from.'''
-    def __init__(self, data_dir, seq_len, frame_stack=3):
+    def __init__(self, data_dir, n_trajs, seq_len, frame_stack=3):
         self._data_dir = data_dir
         self._seq_len = seq_len
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
         self._frame_stack = frame_stack
+        self._n_trajs = n_trajs
         
         # filenames
         self._episode_fns = []
@@ -170,7 +171,7 @@ class VD4RLSequenceReplayBuffer:
         return True
     
     def _try_fetch(self):
-        eps_fns = self._data_dir.glob('*.npz')
+        eps_fns = list(self._data_dir.glob('*.npz'))[:self._n_trajs]
         for eps_fn in eps_fns:
             lidx = eps_fn.stem.index('_')
             idx = int(eps_fn.stem[lidx+1:])
@@ -188,10 +189,11 @@ class VD4RLSequenceReplayBuffer:
     
 class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
-    def __init__(self, data_dir, frame_stack=3):
+    def __init__(self, data_dir, n_trajs, frame_stack=3):
         self._data_dir = data_dir
         self._data_keys = ['image', 'action', 'reward', 'is_terminal']
         self._frame_stack = frame_stack
+        self._n_trajs = n_trajs
         
         # filenames
         self._episode_fns = []
@@ -218,7 +220,7 @@ class VD4RLTransitionReplayBuffer:
         return True
     
     def _try_fetch(self):
-        eps_fns = self._data_dir.glob('*.npz')
+        eps_fns = list(self._data_dir.glob('*.npz'))[:self._n_trajs]
         for eps_fn in eps_fns:
             lidx = eps_fn.stem.index('_')
             idx = int(eps_fn.stem[lidx+1:])
@@ -512,11 +514,12 @@ def numpy_collate(batch, stack_dim=0):
 class VD4RLSequenceDataset(IterableDataset):
     def __init__(self,
                  data_dir,
+                 n_trajs,
                  seq_len,
                  max_steps,
                  frame_stack = 3):
         super().__init__()
-        self.buffer = VD4RLSequenceReplayBuffer(data_dir, seq_len, frame_stack)
+        self.buffer = VD4RLSequenceReplayBuffer(data_dir, n_trajs, seq_len, frame_stack)
         self.max_steps = max_steps
         
     def _sample(self):
@@ -533,10 +536,11 @@ class VD4RLSequenceDataset(IterableDataset):
 class VD4RLTransitionDataset(IterableDataset):
     def __init__(self,
                  data_dir,
+                 n_trajs,
                  max_steps,
                  frame_stack = 3):
         super().__init__()
-        self.buffer = VD4RLTransitionReplayBuffer(data_dir, frame_stack)
+        self.buffer = VD4RLTransitionReplayBuffer(data_dir, n_trajs, frame_stack)
         self.max_steps = max_steps
         
     def _sample(self):
@@ -578,8 +582,8 @@ class NumpyLoader(DataLoader):
             worker_init_fn=worker_init_fn
         )
         
-def byol_sampling_dataloader_torch(data_dir, seq_len, max_steps, batch_size, frame_stack = 3):
-    dset = VD4RLSequenceDataset(data_dir, seq_len, max_steps, frame_stack)
+def byol_sampling_dataloader_torch(data_dir, n_trajs, seq_len, max_steps, batch_size, frame_stack = 3):
+    dset = VD4RLSequenceDataset(data_dir, n_trajs, seq_len, max_steps, frame_stack)
     dloader = NumpyLoader(
         dset,
         batch_size=batch_size,
@@ -588,8 +592,8 @@ def byol_sampling_dataloader_torch(data_dir, seq_len, max_steps, batch_size, fra
     )
     return dloader
 
-def rnd_sampling_dataloader_torch(data_dir, max_steps, batch_size, frame_stack = 3):
-    dset = VD4RLTransitionDataset(data_dir, max_steps, frame_stack)
+def rnd_sampling_dataloader_torch(data_dir, n_trajs, max_steps, batch_size, frame_stack = 3):
+    dset = VD4RLTransitionDataset(data_dir, n_trajs, max_steps, frame_stack)
     dloader = NumpyLoader(
         dset,
         batch_size=batch_size,

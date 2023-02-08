@@ -8,8 +8,6 @@ project_name: ???
 seed: 0
 level: med_exp
 train_byol: false
-torch_data: false
-use_fn_dataset: false
 
 # environment parameters
 img_size: 64
@@ -31,9 +29,12 @@ dreamer: true
 depth: 32
 
 # dataset args
+num_trajs: 200
 normalize_inputs: true
 normalize_state_only: true
-sample_batches: false
+sample_batches: true
+torch_data: false
+use_fn_dataset: false
 
 # reward augmentations
 aug: rnd
@@ -79,7 +80,7 @@ byol:
   obs_shape: ${obs_shape}
   action_shape: ${action_shape}
   optim: adam
-  lr: 1e-4
+  lr: 3e-4
   ema: 0.99
   pmap: ${pmap}
 
