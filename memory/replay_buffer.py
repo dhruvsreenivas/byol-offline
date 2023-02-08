@@ -26,6 +26,55 @@ def load_episode(fn, relevant_keys):
         episode = {k: episode[k] for k in relevant_keys}
         return episode
     
+def sample_seq_from_episode(episode, seq_len, frame_stack):
+    idx = np.random.randint(0, episode_len(episode) - seq_len)
+    
+    obs = []
+    actions = []
+    rewards = []
+    next_obs = []
+    dones = []
+    
+    for i in range(idx, idx + seq_len):
+        # current obs
+        if i < frame_stack - 1:
+            repeat = frame_stack - i
+            first_frame = episode["image"][0]
+            other_frames = [episode['image'][j] for j in range(1, i+1)] # i frames exactly
+            ob = np.concatenate([first_frame] * repeat + other_frames, axis=-1).astype(np.float32) # (H, W, C * frame_stack)
+        else:
+            ob = [episode["image"][i - x] for x in reversed(range(frame_stack))]
+            ob = np.concatenate(ob, -1).astype(np.float32)
+        
+        # current next obs
+        if i + 1 < frame_stack - 1:
+            repeat = frame_stack - (i + 1)
+            first_frame = episode['image'][0]
+            other_next_frames = [episode['image'][j] for j in range(1, i+2)] # i + 1 frames exactly
+            next_ob = np.concatenate([first_frame] * repeat + other_next_frames, axis=-1).astype(np.float32)
+        else:
+            next_ob = [episode["image"][i - x + 1] for x in reversed(range(frame_stack))]
+            next_ob = np.concatenate(next_ob, -1).astype(np.float32)
+        
+        obs.append(ob)
+        next_obs.append(next_ob)
+        
+        action = episode['action'][i].astype(np.float32)
+        reward = episode['reward'][i].astype(np.float32)
+        done = episode['is_terminal'][i].astype(np.float32)
+        
+        actions.append(action)
+        rewards.append(reward)
+        dones.append(done)
+    
+    obs = np.stack(obs)
+    actions = np.stack(actions)
+    rewards = np.stack(rewards)
+    next_obs = np.stack(next_obs)
+    dones = np.stack(dones)
+
+    return obs, actions, rewards, next_obs, dones
+    
 def get_dataset_size(dataset):
     return dataset['observations'].shape[0]
 
@@ -135,53 +184,7 @@ class VD4RLSequenceReplayBuffer:
     def _sample(self):
         # observations are (T, H, W, C * frame_stack)
         episode = self._sample_episode()
-        idx = np.random.randint(0, episode_len(episode) - self._seq_len)
-        
-        obs = []
-        actions = []
-        rewards = []
-        next_obs = []
-        dones = []
-        
-        for i in range(idx, idx + self._seq_len):
-            # current obs
-            if i < self._frame_stack - 1:
-                repeat = self._frame_stack - i
-                first_frame = episode["image"][0]
-                other_frames = [episode['image'][j] for j in range(1, i+1)] # i frames exactly
-                ob = np.concatenate([first_frame] * repeat + other_frames, axis=-1).astype(np.float32) # (H, W, C * frame_stack)
-            else:
-                ob = [episode["image"][i - x] for x in reversed(range(self._frame_stack))]
-                ob = np.concatenate(ob, -1).astype(np.float32)
-            
-            # current next obs
-            if i + 1 < self._frame_stack - 1:
-                repeat = self._frame_stack - (i + 1)
-                first_frame = episode['image'][0]
-                other_next_frames = [episode['image'][j] for j in range(1, i+2)] # i + 1 frames exactly
-                next_ob = np.concatenate([first_frame] * repeat + other_next_frames, axis=-1).astype(np.float32)
-            else:
-                next_ob = [episode["image"][i - x + 1] for x in reversed(range(self._frame_stack))]
-                next_ob = np.concatenate(next_ob, -1).astype(np.float32)
-            
-            obs.append(ob)
-            next_obs.append(next_ob)
-            
-            action = episode['action'][i].astype(np.float32)
-            reward = episode['reward'][i].astype(np.float32)
-            done = episode['is_terminal'][i].astype(np.float32)
-            
-            actions.append(action)
-            rewards.append(reward)
-            dones.append(done)
-        
-        obs = np.stack(obs)
-        actions = np.stack(actions)
-        rewards = np.stack(rewards)
-        next_obs = np.stack(next_obs)
-        dones = np.stack(dones)
-
-        return obs, actions, rewards, next_obs, dones
+        return sample_seq_from_episode(episode, self._seq_len, self._frame_stack)
     
 class VD4RLTransitionReplayBuffer:
     '''Replay buffer used to sample batches of arbitrary transitions.'''
@@ -353,6 +356,48 @@ def transpose_fn_state(obs, action, reward, next_obs, done):
 
 # ====================================================== TENSORFLOW ======================================================
 
+def random_sample_from_traj(data_dir, max_steps, seq_len, frame_stack = 3):
+    traj_fns = list(data_dir.glob('*.npz'))
+    
+    for _ in range(max_steps):
+        traj = np.random.choice(traj_fns)
+        episode = load_episode(traj, relevant_keys = ['image', 'action', 'reward', 'is_terminal'])
+        yield sample_seq_from_episode(episode, seq_len, frame_stack)
+
+def byol_fn_dataloader_tf(data_dir,
+                          max_steps,
+                          batch_size,
+                          seq_len,
+                          frame_stack = 3,
+                          prefetch = True):
+
+    traj_fns = list(data_dir.glob('*.npz'))
+    traj = np.random.choice(traj_fns)
+    episode = load_episode(traj, ['image', 'action', 'reward', 'is_terminal'])
+    obs, action, reward, next_obs, done = sample_seq_from_episode(episode, seq_len, frame_stack)
+    
+    obs_type, action_type, reward_type, next_obs_type, done_type = obs.dtype, action.dtype, reward.dtype, next_obs.dtype, done.dtype
+    obs_shape, action_shape, reward_shape, next_obs_shape, done_shape = obs.shape, action.shape, reward.shape, next_obs.shape, done.shape
+    
+    generator = lambda: random_sample_from_traj(data_dir, max_steps, seq_len, frame_stack)
+    output_sig = (
+        tf.TensorSpec(shape=obs_shape, dtype=obs_type),
+        tf.TensorSpec(shape=action_shape, dtype=action_type),
+        tf.TensorSpec(shape=reward_shape, dtype=reward_type),
+        tf.TensorSpec(shape=next_obs_shape, dtype=next_obs_type),
+        tf.TensorSpec(shape=done_shape, dtype=done_type)
+    )
+    
+    dataset = tf.data.Dataset.from_generator(generator, output_signature=output_sig)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+
+    dataset = dataset.map(transpose_fn_img)
+    
+    if prefetch:
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    
+    return tfds.as_numpy(dataset)
+    
 def byol_sampling_dataloader_tf(buffer: Union[VD4RLSequenceReplayBuffer, D4RLSequenceReplayBuffer],
                                 max_steps: int,
                                 batch_size: int,

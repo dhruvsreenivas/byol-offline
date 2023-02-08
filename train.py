@@ -158,7 +158,8 @@ class Workspace:
         else:
             # BYOL dataloader
             if self.cfg.task not in MUJOCO_ENVS:
-                byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
+                if not self.cfg.torch_data:
+                    byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
                 byol_buffer = D4RLSequenceReplayBuffer(

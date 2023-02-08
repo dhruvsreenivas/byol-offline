@@ -215,6 +215,38 @@ def test_sampler_dataloading_tf(d4rl=True, byol=True):
                 assert done.shape == d_shape
             
             count += 1
+            
+def test_byol_fn_dataloading():
+    data_dir = Path('./offline_data/dmc/cheetah_run/med_exp')
+    dset = byol_fn_dataloader_tf(data_dir, max_steps=10000, batch_size=50, seq_len=10)
+    
+    o_shape, a_shape, r_shape, no_shape, d_shape = None, None, None, None, None
+
+    count = 0
+    for batch in dset:
+        o, a, r, no, d = batch
+        if count == 0:
+            print(o.shape)
+            print(a.shape)
+            print(r.shape)
+            print(no.shape)
+            print(d.shape)
+            
+            o_shape = o.shape
+            a_shape = a.shape
+            r_shape = r.shape
+            no_shape = no.shape
+            d_shape = d.shape
+        else:
+            assert o.shape == o_shape
+            assert a.shape == a_shape
+            assert r.shape == r_shape
+            assert no.shape == no_shape
+            assert d.shape == d_shape
+        
+        count += 1
+    
+    print(f'total number of batches: {count}')
 
 def test_sampler_dataloading_torch():
     print('=== Testing dataloading with PyTorch ===')
@@ -467,4 +499,5 @@ if __name__ == '__main__':
     # test_get_test_traj()
     # =========================
     # test_sampler_dataloading_tf(d4rl=False, byol=True)
-    test_sampler_dataloading_torch()
+    # test_sampler_dataloading_torch()
+    test_byol_fn_dataloading()
