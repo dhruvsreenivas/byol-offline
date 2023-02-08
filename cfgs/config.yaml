@@ -9,6 +9,7 @@ seed: 0
 level: med_exp
 train_byol: false
 torch_data: false
+use_fn_dataset: false
 
 # environment parameters
 img_size: 64

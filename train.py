@@ -158,7 +158,7 @@ class Workspace:
         else:
             # BYOL dataloader
             if self.cfg.task not in MUJOCO_ENVS:
-                if not self.cfg.torch_data:
+                if not self.cfg.torch_data and not self.cfg.use_fn_dataset:
                     byol_buffer = VD4RLSequenceReplayBuffer(self.offline_dir, self.cfg.seq_len, self.cfg.frame_stack)
             else:
                 lvl = 'medium-expert' if self.cfg.level == 'med_exp' else self.cfg.level # TODO make better
@@ -174,7 +174,10 @@ class Workspace:
             if self.cfg.torch_data:
                 self.byol_dataloader = byol_sampling_dataloader_torch(self.offline_dir, self.cfg.seq_len, self.cfg.max_steps, self.cfg.model_batch_size, self.cfg.frame_stack)
             else:
-                self.byol_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
+                if self.cfg.use_fn_dataset:
+                    self.byol_dataloader = byol_fn_dataloader_tf(self.offline_dir, self.cfg.max_steps, self.cfg.model_batch_size, self.cfg.seq_len, self.cfg.frame_stack)
+                else:
+                    self.byol_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.max_steps, self.cfg.model_batch_size)
         
         # VAE model + dataloader (only for mujoco envs)
         if self.cfg.task in MUJOCO_ENVS:
@@ -196,7 +199,10 @@ class Workspace:
             if self.cfg.torch_data:
                 self.agent_dataloader = byol_sampling_dataloader_torch(self.offline_dir, self.cfg.seq_len, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size, self.cfg.frame_stack)
             else:
-                self.agent_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
+                if self.cfg.use_fn_dataset:
+                    self.agent_dataloader = byol_fn_dataloader_tf(self.offline_dir, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size, self.cfg.seq_len, self.cfg.frame_stack)
+                else:
+                    self.agent_dataloader = byol_sampling_dataloader_tf(byol_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
         else:
             if self.cfg.sample_batches:
                 self.agent_dataloader = rnd_sampling_dataloader_tf(rnd_buffer, self.cfg.policy_rb_capacity, self.cfg.policy_batch_size)
