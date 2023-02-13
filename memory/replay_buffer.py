@@ -10,7 +10,7 @@ from functools import partial
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-# pytorch dataset utilities because TFDS sucks with mem alloc
+# pytorch dataset utilities in case TFDS fails
 from torch.utils.data import IterableDataset, DataLoader
 
 Transition = namedtuple('Transition', ['obs', 'actions', 'rewards', 'next_obs', 'dones'])
