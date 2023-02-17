@@ -88,6 +88,7 @@ byol:
   stoch_dim: 32
   stoch_discrete_dim: 32
   beta: 1.0
+  kl_balancing: 0.0
 
   vd4rl:
     obs_shape: ${obs_shape}

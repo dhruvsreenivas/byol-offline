@@ -65,16 +65,17 @@ def test_rssm(cfg):
     rssm = hk.transform(rssm_fn)
     
     key = jax.random.PRNGKey(42)
-    embed_key, action_key, state_key, init_key, apply_key = jax.random.split(key, 5)
+    embed_key, action_key, init_key, apply_key = jax.random.split(key, 4)
     rand_embeds = jax.random.normal(embed_key, shape=(20, 10, 100))
     rand_actions = jax.random.normal(action_key, shape=(20, 10, 6))
-    rand_state = jax.random.normal(state_key, shape=(10, 2048)) # 32 * 32 + 1024, don't have to change the config then, no need for timestep dim
+    rand_state = None
     
     params = rssm.init(init_key, rand_embeds, rand_actions, rand_state)
-    priors, posts, features = rssm.apply(params, apply_key, rand_embeds, rand_actions, rand_state)
-    print(priors.shape)
-    print(posts.shape)
-    print(features.shape)
+    priors, posts, post_features, prior_features = rssm.apply(params, apply_key, rand_embeds, rand_actions, rand_state)
+    print(f'prior shape: {priors.shape}')
+    print(f'post shape: {posts.shape}')
+    print(f'post features shape: {post_features.shape}')
+    print(f'prior features shape: {prior_features.shape}')
     
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model_module(cfg):
@@ -495,9 +496,9 @@ def test_rl_algo(cfg):
 if __name__ == '__main__':
     # test_world_model_module()
     # test_world_model_update()
+    test_rssm()
     # =========================
     # test_get_test_traj()
     # =========================
     # test_sampler_dataloading_tf(d4rl=False, byol=True)
     # test_sampler_dataloading_torch()
-    test_byol_fn_dataloading()

@@ -56,7 +56,7 @@ class ConvWorldModel(hk.Module):
         def _scan_fn(carry, act):
             state = carry
             new_state, _ = self._rssm._onestep_prior(act, state)
-            return new_state, new_state[..., :self._rssm._deter_dim] # new feature, deter state
+            return new_state, new_state[-2] # new feature, deter state
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
@@ -101,15 +101,15 @@ class ConvWorldModel(hk.Module):
         # first get embeddings
         B = obs.shape[1]
         embeds = hk.BatchApply(self._encoder)(obs)
-        init_feature = self._rssm._init_feature(B)
+        init_state = self._rssm._init_state(B)
         
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_feature, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
-        latent = self._byol_predictor(first_feature[..., :self._rssm._deter_dim])
+        first_state, _ = self._rssm._onestep_post(embed, action, init_state) # h_0
+        latent = self._byol_predictor(first_state[-2])
         latent = jnp.expand_dims(latent, 0)
         
         # === collect h_t, latents (byol stuff) ===
-        deter_states = self._open_gru_rollout(actions[1:], first_feature)
+        deter_states = self._open_gru_rollout(actions[1:], first_state)
         latents = self._byol_predictor(deter_states)
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeds
         
@@ -189,15 +189,15 @@ class MLPWorldModel(hk.Module):
         # first get embeddings
         B = obs.shape[1]
         embeds = hk.BatchApply(self._encoder)(obs)
-        init_feature = self._rssm._init_feature(B)
+        init_state = self._rssm._init_state(B)
         
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_feature, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
-        latent = self._byol_predictor(first_feature[..., :self._rssm._deter_dim])
+        first_state, _ = self._rssm._onestep_post(embed, action, init_state) # h_0
+        latent = self._byol_predictor(first_state[-2])
         latent = jnp.expand_dims(latent, 0)
         
         # === collect h_t, latents (byol stuff) ===
-        deter_states = self._open_gru_rollout(actions[1:], first_feature)
+        deter_states = self._open_gru_rollout(actions[1:], first_state)
         latents = hk.BatchApply(self._byol_predictor)(deter_states)
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeds
         
@@ -213,7 +213,7 @@ class MLPWorldModel(hk.Module):
         def _scan_fn(carry, act):
             state = carry
             new_state, _ = self._rssm._onestep_prior(act, state)
-            return new_state, new_state[..., :self._rssm._deter_dim]
+            return new_state, new_state[-2]
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
@@ -310,7 +310,10 @@ class WorldModelTrainer:
         discrete = cfg.stoch_discrete_dim > 1
         beta = cfg.beta # trades off Dreamer ELBO loss and BYOL loss
         
-        def _get_latent_dist(stats: jnp.ndarray) -> Union[distrax.Distribution, distrax.DistributionLike]:
+        def _get_latent_dist(stats: jnp.ndarray, sg: bool = False) -> Union[distrax.Distribution, distrax.DistributionLike]:
+            if sg:
+                stats = jax.lax.stop_gradient(stats)
+            
             if discrete:
                 stats = stats.reshape(stats.shape[:-1] + (cfg.stoch_dim, cfg.stoch_discrete_dim))
                 dist = distrax.straight_through_wrapper(distrax.OneHotCategorical)(logits=stats)
@@ -381,7 +384,14 @@ class WorldModelTrainer:
             
             post_dist = _get_latent_dist(post_stats)
             prior_dist = _get_latent_dist(prior_stats)
-            kl = post_dist.kl_divergence(prior_dist).mean()
+            
+            if cfg.kl_balancing > 0:
+                post_dist_sg = _get_latent_dist(post_stats, sg=True)
+                prior_dist_sg = _get_latent_dist(prior_stats, sg=True)
+                
+                kl = cfg.kl_balancing * post_dist_sg.kl_divergence(prior_dist).mean() + (1.0 - cfg.kl_balancing) * prior_dist_sg.kl_divergence(post_dist).mean()
+            else:
+                kl = post_dist.kl_divergence(prior_dist).mean()
             
             metrics = {
                 'rec': rec_loss,
