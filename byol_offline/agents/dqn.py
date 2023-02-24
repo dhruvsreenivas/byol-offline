@@ -5,10 +5,12 @@ import optax
 from typing import NamedTuple
 import dill
 
+from byol_offline.agents.agent import Agent
 from byol_offline.models.byol_model import WorldModelTrainer
 from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.actor_critic import DuelingDQN
 from byol_offline.agents.agent_utils import *
+
 from utils import ATARI_ENVS, batched_zeros_like
 from memory.replay_buffer import Transition
 
@@ -18,7 +20,7 @@ class DQNTrainState(NamedTuple):
     opt_state: optax.OptState
     rng_key: jax.random.PRNGKey
     
-class DQN:
+class DQN(Agent):
     def __init__(self, cfg, byol=None, rnd=None):
         # encoder
         assert cfg.task in ATARI_ENVS, "DQN only works for discrete envs like Atari."

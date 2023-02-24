@@ -5,11 +5,13 @@ import optax
 from typing import NamedTuple
 import dill
 
+from byol_offline.agents.agent import Agent
 from byol_offline.models.byol_model import WorldModelTrainer
 from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
+
 from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
 from memory.replay_buffer import Transition
 
@@ -25,7 +27,7 @@ class DDPGTrainState(NamedTuple):
     
     rng_key: jax.random.PRNGKey # updated every time we act or learn
 
-class DDPG:
+class DDPG(Agent):
     '''DDPG agent from DrQv2 (without the data augmentations).'''
     def __init__(self, cfg, byol=None, rnd=None):
         # SET UP

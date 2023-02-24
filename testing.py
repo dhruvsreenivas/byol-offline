@@ -2,6 +2,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import jax
+from jax.lib import xla_bridge
 import jax.numpy as jnp
 import numpy as np
 import haiku as hk
@@ -17,9 +18,10 @@ from byol_offline.networks.encoder import *
 from byol_offline.networks.decoder import *
 from byol_offline.networks.rnn import *
 from byol_offline.models import *
-from byol_offline.agents.td3 import TD3
+from byol_offline.agents import *
+
 from memory.replay_buffer import *
-from utils import get_gym_dataset, make_gym_env, print_dict, get_test_traj, to_seq_np
+from utils import get_gym_dataset, make_gym_env, print_dict, get_test_traj
 
 '''Various testing functions to make sure core machinery works.'''
 
@@ -128,6 +130,8 @@ def test_world_model_module(cfg):
 @hydra.main(config_path='cfgs', config_name='config')
 def test_world_model_update(cfg):
     '''Testing if the world model loss function/update scheme works.'''
+    device = xla_bridge.get_backend().platform
+    
     cfg.obs_shape = (64, 64, 9)
     cfg.action_shape = (6,)
     # cfg.pmap = True # for now just test pmapping abilities
@@ -145,14 +149,15 @@ def test_world_model_update(cfg):
     print('=' * 20 + ' created first set of rand inputs ' + '=' * 20)
     
     start_time = time.time()
-    _, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
+    new_state, metrics = wm_trainer._update(wm_trainer.train_state, rand_obs, rand_act, rand_rew, 0)
+    wm_trainer.train_state = new_state
     end_time = time.time()
     print_dict(metrics)
     
     secs = end_time - start_time
     mins = int(secs // 60)
     secs = secs % 60
-    print(f'total amount of time taken for jit compile + update: {mins} mins & {secs} secs.')
+    print(f'total amount of time taken for jit compile + update on {device}: {mins} mins & {secs} secs.')
     
     obs_key_2, act_key_2, rew_key_2 = jax.random.split(second_key, 3)
     rand_obs_2 = jax.random.normal(obs_key_2, (10, 50, 64, 64, 9))
@@ -167,7 +172,24 @@ def test_world_model_update(cfg):
     secs_2 = end_time_2 - start_time_2
     mins_2 = int(secs_2 // 60)
     secs_2 = secs_2 % 60
-    print(f'total amount of time for 1 update after jit compilation: {mins_2} mins & {secs_2} secs.')
+    print(f'total amount of time for 1 update after jit compilation on {device}: {mins_2} mins & {secs_2} secs.')
+
+@hydra.main(config_path='cfgs', config_name='config')
+def test_model_rollout(cfg):
+    cfg.obs_shape = (64, 64, 9)
+    cfg.action_shape = (6,)
+    
+    wm_trainer = WorldModelTrainer(cfg.byol)
+    init_obs = jnp.zeros((64, 64, 9))
+    agent = DDPG(cfg)
+    horizon = 20
+    
+    s, a, r, ns, d = wm_trainer._rollout(init_obs, agent, 10, horizon)
+    print(f'state shape: {s.shape}')
+    print(f'action shape: {a.shape}')
+    print(f'reward shape: {r.shape}')
+    print(f'next obs shape: {ns.shape}')
+    print(f'done shape: {d.shape}')
 
 def test_sampler_dataloading_tf(d4rl=True, byol=True):
     '''Testing dataloading across epochs.'''
@@ -496,7 +518,8 @@ def test_rl_algo(cfg):
 if __name__ == '__main__':
     # test_world_model_module()
     # test_world_model_update()
-    test_rssm()
+    test_model_rollout()
+    # test_rssm()
     # =========================
     # test_get_test_traj()
     # =========================

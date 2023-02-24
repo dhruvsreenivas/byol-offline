@@ -6,11 +6,13 @@ import optax
 from typing import NamedTuple
 import dill
 
+from byol_offline.agents.agent import Agent
 from byol_offline.models.byol_model import WorldModelTrainer
 from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.actor_critic import *
 from byol_offline.agents.agent_utils import *
+
 from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
 from memory.replay_buffer import Transition
 
@@ -28,7 +30,7 @@ class SACTrainState(NamedTuple):
     
     rng_key: jax.random.PRNGKey
     
-class SAC:
+class SAC(Agent):
     '''SACv2 agent from Denis Yarats' PyTorch SAC repo.'''
     def __init__(self, cfg, byol=None, rnd=None):
         # SET UP

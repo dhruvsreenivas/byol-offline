@@ -7,7 +7,9 @@ import dill
 
 from byol_offline.networks.encoder import DrQv2Encoder
 from byol_offline.networks.actor_critic import BCActor
-from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
+from byol_offline.agents.agent import Agent
+
+from utils import MUJOCO_ENVS, batched_zeros_like
 from memory.replay_buffer import Transition
 
 class BCTrainState(NamedTuple):
@@ -17,8 +19,9 @@ class BCTrainState(NamedTuple):
     encoder_params: Optional[hk.Params] = None
     encoder_opt_state: Optional[optax.OptState] = None
     
-class BC:
-    def __init__(self, cfg):
+class BC(Agent):
+    def __init__(self, cfg, byol=None, rnd=None):
+        del byol, rnd
         self.cfg = cfg
         
         # encoder
@@ -60,8 +63,10 @@ class BC:
         
         # =================== START OF ALL FNS ===================
         
-        def act(obs: jnp.ndarray, eval_mode: bool):
+        def act(obs: jnp.ndarray, step: int, eval_mode: bool):
             '''Choose an action to execute in env.'''
+            del step
+            
             rng, key = jax.random.split(self.train_state.rng_key)
             
             if cfg.task not in MUJOCO_ENVS:

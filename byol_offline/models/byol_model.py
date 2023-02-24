@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import numpy as np
 import haiku as hk
 import optax
 import distrax
@@ -12,6 +11,8 @@ from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
 from byol_offline.networks.rnn import *
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
+
+from memory.replay_buffer import Transition
 from utils import MUJOCO_ENVS, seq_batched_zeros_like
 
 class BYOLTrainState(NamedTuple):
@@ -68,7 +69,7 @@ class ConvWorldModel(hk.Module):
         img_mean = self._decoder(new_state)
         reward_mean = self._reward_predictor(new_state)
         
-        return img_mean, reward_mean
+        return img_mean, reward_mean, new_state
     
     def _onestep_observe(self, obs, action, state):
         emb = self._encoder(obs)
@@ -76,7 +77,7 @@ class ConvWorldModel(hk.Module):
         img_mean = self._decoder(new_state)
         reward_mean = self._reward_predictor(new_state)
         
-        return img_mean, reward_mean
+        return img_mean, reward_mean, new_state
     
     # ===== things used in training/to define loss function in trainer =====
     
@@ -154,7 +155,7 @@ class MLPWorldModel(hk.Module):
         state_mean = self._decoder(new_state)
         reward_mean = self._reward_predictor(new_state)
         
-        return state_mean, reward_mean
+        return state_mean, reward_mean, new_state
     
     def _onestep_observe(self, obs, action, state):
         emb = self._encoder(obs)
@@ -162,7 +163,7 @@ class MLPWorldModel(hk.Module):
         state_mean = self._decoder(new_state)
         reward_mean = self._reward_predictor(new_state)
         
-        return state_mean, reward_mean
+        return state_mean, reward_mean, new_state
     
     # ===== things used in training/to define loss function in trainer =====
     
@@ -236,6 +237,9 @@ class WorldModelTrainer:
                     # same as standard forward pass
                     return wm(o, a)
                 
+                def rssm_init_state(bs):
+                    return wm._rssm._init_state(bs)
+                
                 def dreamer_forward(o, a):
                     return wm._dreamer_forward(o, a)
                 
@@ -245,7 +249,7 @@ class WorldModelTrainer:
                 def imagine_fn(a, s):
                     return wm._onestep_imagine(a, s)
                 
-                return init, (dreamer_forward, byol_forward, imagine_fn)
+                return init, (rssm_init_state, dreamer_forward, byol_forward, imagine_fn)
         else:
             def wm_fn():
                 wm = ConvWorldModel(cfg.vd4rl)
@@ -254,6 +258,9 @@ class WorldModelTrainer:
                     # same as standard forward pass
                     return wm(o, a)
                 
+                def rssm_init_state(bs):
+                    return wm._rssm._init_state(bs)
+                
                 def dreamer_forward(o, a):
                     return wm._dreamer_forward(o, a)
                 
@@ -263,7 +270,7 @@ class WorldModelTrainer:
                 def imagine_fn(a, s):
                     return wm._onestep_imagine(a, s)
                 
-                return init, (dreamer_forward, byol_forward, imagine_fn)
+                return init, (rssm_init_state, dreamer_forward, byol_forward, imagine_fn)
         
         # should be ok with byol loss here, as byol loss is regardless deterministic and only depends on deter states
         # rngs are used in the dreamer section of the model for generation, so cannot use without_apply_rng
@@ -297,14 +304,15 @@ class WorldModelTrainer:
 
         # similar to make initial state for BYOL: https://github.com/deepmind/deepmind-research/blob/master/byol/byol_experiment.py#L424
         if cfg.pmap:
-            init_wm = jax.pmap(make_initial_state, axis_name='i')
+            assert jax.local_device_count() > 1, "need more than 1 device to do parallelism"
+            init_wm = jax.pmap(make_initial_state, axis_name='num_devices')
         else:
             init_wm = make_initial_state
         
         self.train_state = init_wm(key)
         
         # hparams and fns to note
-        dreamer_forward, byol_forward, imagine_onestep = wm.apply
+        rssm_init_state, dreamer_forward, byol_forward, imagine_onestep = wm.apply
         
         ema = cfg.ema
         discrete = cfg.stoch_discrete_dim > 1
@@ -447,8 +455,8 @@ class WorldModelTrainer:
             (loss, metrics), grads = loss_grad_fn(train_state.wm_params, train_state.target_params, obs, actions, rewards, update_key)
             
             if cfg.pmap:
-                loss = jax.lax.pmean(loss, axis_name='i') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
-                grads = jax.lax.pmean(grads, axis_name='i')
+                loss = jax.lax.pmean(loss, axis_name='num_devices') # maybe use jax.tree_util.tree_map later if this doesn't work and is actually needed
+                grads = jax.lax.pmean(grads, axis_name='num_devices')
             
             update, new_opt_state = wm_opt.update(grads, train_state.wm_opt_state)
             new_params = optax.apply_updates(train_state.wm_params, update)
@@ -493,16 +501,53 @@ class WorldModelTrainer:
             new_train_state = self.train_state._replace(rng_key=state_key)
             return new_train_state, jax.lax.stop_gradient(img_means)
         
+        def rollout(init_ob: jnp.ndarray,
+                    agent,
+                    global_step: int,
+                    horizon: int):
+            
+            obs = []
+            actions = []
+            rewards = []
+            next_obs = []
+            dones = []
+            
+            state = rssm_init_state(self.train_state.wm_params, self.train_state.rng_key, None)
+            ob = init_ob
+            for _ in range(horizon):
+                act = agent._act(ob, global_step, eval_mode=True)
+                ob_mean, rew_mean = imagine_onestep(act, state)
+                
+                obs.append(ob)
+                actions.append(act)
+                rewards.append(rew_mean)
+                next_obs.append(ob_mean)
+                dones.append(0.0)
+                
+                ob = ob_mean
+            
+            obs = jnp.stack(obs)
+            actions = jnp.stack(actions)
+            rewards = jnp.stack(rewards)
+            next_obs = jnp.stack(next_obs)
+            dones = jnp.stack(dones)
+            
+            return Transition(obs, actions, rewards, next_obs, dones)
+
+        # ====== full trainer init ======
+        
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # auto jits so don't need to do jax.jit before pmap
         if cfg.pmap:
-            self._update = jax.pmap(update, axis_name='i')
-            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='i')
-            self._eval = jax.pmap(eval, axis_name='i')
+            self._update = jax.pmap(update, axis_name='num_devices')
+            self._compute_uncertainty = jax.pmap(compute_uncertainty, axis_name='devices')
+            self._eval = jax.pmap(eval, axis_name='num_devices')
+            self._rollout = jax.pmap(rollout, axis_name='num_devices') # do we do this? why?
         else:
             self._update = jax.jit(update)
             self._compute_uncertainty = jax.jit(compute_uncertainty)
             self._eval = jax.jit(eval)
+            self._rollout = rollout
     
     def save(self, model_path):
         with open(model_path, 'wb') as f:

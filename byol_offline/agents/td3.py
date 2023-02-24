@@ -5,10 +5,12 @@ import optax
 from typing import NamedTuple
 import dill
 
+from byol_offline.agents.agent import Agent
 from byol_offline.models.byol_model import WorldModelTrainer
 from byol_offline.models.rnd_model import RNDModelTrainer
 from byol_offline.networks.actor_critic import TD3Actor, TD3Critic
 from byol_offline.agents.agent_utils import *
+
 from utils import batched_zeros_like
 from memory.replay_buffer import Transition
 
@@ -23,7 +25,7 @@ class TD3TrainState(NamedTuple):
     
     rng_key: jax.random.PRNGKey
 
-class TD3:
+class TD3(Agent):
     '''TD3 implementation for MuJoCo only.'''
     def __init__(self, cfg, byol=None, rnd=None):
         # SET UP
