@@ -32,15 +32,15 @@ class DDPGState(NamedTuple):
     actor_opt_state: optax.OptState
     critic_opt_state: optax.OptState
     
-    rng_key: chex.PRNGKey
-    
-    
+    rng_key: jax.random.PRNGKey # updated every time we act or learn
+
+
 def make_ddpg_networks(
-    config: ConfigDict,
+    config: ConfigDict, 
     observation_space: gym.Space,
     action_space: gym.Space,
 ) -> NetworkFns:
-    """Makes all functions needed for DDPG."""
+    """Makes networks for DDPG."""
     
     encoder_config = config.encoder
     
@@ -66,7 +66,6 @@ def make_ddpg_networks(
     def critic_fn(observation: chex.Array, action: chex.Array) -> DoubleQOutputs:
         critic = DDPGCritic(config.feature_dim, config.ac_hidden_dim)
         return critic(observation, action)
-    
     
     encoder = hk.without_apply_rng(hk.transform(encoder_fn))
     actor = hk.without_apply_rng(hk.transform(actor_fn))
