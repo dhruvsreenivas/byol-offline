@@ -1,187 +1,225 @@
+import chex
+import haiku as hk
 import jax
 import jax.numpy as jnp
-import haiku as hk
-from byol_offline.networks.network_utils import *
+import distrax
+
+from byol_offline.distributions import ClippedNormal, TanhTransformed
 from byol_offline.networks.encoder import AtariEncoder, DuelingMLP
+from byol_offline.types import DoubleQOutputs
+
+"""Actor critic modules."""
 
 # ============================== DDPG ==============================
 
 class DDPGActor(hk.Module):
-    def __init__(self, action_shape, feature_dim, hidden_dim):
+    """DDPG actor for visual control."""
+    
+    def __init__(self, action_dim: int, feature_dim: int, hidden_dim: int):
         super().__init__()
         
-        self.trunk = hk.Sequential([
-            hk.Linear(feature_dim, w_init=INITIALIZERS['linear_orthogonal']),
+        initializer = hk.initializers.Orthogonal(scale=1.0)
+        
+        self._trunk = hk.Sequential([
+            hk.Linear(feature_dim, w_init=initializer),
             hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
-            jax.lax.tanh
+            jnp.tanh
         ])
         
-        self.policy = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
+        self._policy = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer),
             jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
+            hk.Linear(hidden_dim, w_init=initializer),
             jax.nn.relu,
-            hk.Linear(action_shape[0], w_init=INITIALIZERS['linear_orthogonal'])
+            hk.Linear(action_dim, w_init=initializer)
         ])
     
-    def __call__(self, obs, std):
-        h = self.trunk(obs)
+    def __call__(self, obs: chex.Array, std: chex.Numeric) -> distrax.Distribution:
+        h = self._trunk(obs)
         
-        mu = self.policy(h)
-        mu = jax.lax.tanh(mu)
+        mu = self._policy(h)
+        mu = jnp.tanh(mu)
         std = jnp.ones_like(mu) * std
         
-        dist = ClippedNormal(mu, std)
-        return dist
+        distribution = ClippedNormal(mu, std)
+        return distribution
+
     
 class DDPGCritic(hk.Module):
-    def __init__(self, feature_dim, hidden_dim):
+    """DDPG critic for visual control."""
+    
+    def __init__(self, feature_dim: int, hidden_dim: int):
         super().__init__()
         
-        self.trunk = hk.Sequential([
-            hk.Linear(feature_dim, w_init=INITIALIZERS['linear_orthogonal']),
+        initializer = hk.initializers.Orthogonal(scale=1.0)
+        
+        self._trunk = hk.Sequential([
+            hk.Linear(feature_dim, w_init=initializer),
             hk.LayerNorm(axis=-1, create_scale=True, create_offset=True),
-            jax.lax.tanh
+            jnp.tanh
         ])
         
-        self.q1 = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
+        # q function heads
+        self._q1 = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer),
             jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
+            hk.Linear(hidden_dim, w_init=initializer),
             jax.nn.relu,
-            hk.Linear(1, w_init=INITIALIZERS['linear_orthogonal'])
+            hk.Linear(1, w_init=initializer)
+        ])
+        self._q2 = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer),
+            jax.nn.relu,
+            hk.Linear(hidden_dim, w_init=initializer),
+            jax.nn.relu,
+            hk.Linear(1, w_init=initializer)
         ])
         
-        self.q2 = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
-            jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal']),
-            jax.nn.relu,
-            hk.Linear(1, w_init=INITIALIZERS['linear_orthogonal'])
-        ])
+    def __call__(self, obs: chex.Array, action: chex.Array) -> DoubleQOutputs:
+        h = self._trunk(obs)
         
-    def __call__(self, obs, action):
-        h = self.trunk(obs)
-        h_a = jnp.concatenate([h, action], -1)
-        q1 = self.q1(h_a)
-        q2 = self.q2(h_a)
+        ha = jnp.concatenate([h, action], -1)
+        q1 = self._q1(ha)
+        q2 = self._q2(ha)
         
         return jnp.squeeze(q1), jnp.squeeze(q2)
 
 # ============================== TD3 ==============================
 
 class TD3Actor(hk.Module):
-    '''TD3 actor for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
-    def __init__(self, hidden_dim, action_shape, max_action):
-        super().__init__()
-        self._hidden_dim = hidden_dim
-        self._action_dim = action_shape[0]
-        self._max_action = max_action
-        
-        self._weight_init = INITIALIZERS['he_uniform']
+    """TD3 actor for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py."""
     
-    def __call__(self, obs):
-        x = hk.Linear(self._hidden_dim, w_init=self._weight_init)(obs)
-        x = jax.nn.relu(x)
-        x = hk.Linear(self._hidden_dim, w_init=self._weight_init)(x)
-        x = jax.nn.relu(x)
-        x = hk.Linear(self._action_dim, w_init=self._weight_init)(x)
+    def __init__(self, hidden_dim: int, action_dim: int, max_action: float):
+        super().__init__()
         
-        x = jax.lax.tanh(x)
+        self._hidden_dim = hidden_dim
+        self._action_dim = action_dim
+        self._max_action = max_action
+    
+    def __call__(self, obs: chex.Array) -> chex.Array:
+        initializer = hk.initializers.VarianceScaling(2.0, "fan_in",  "uniform")
+        
+        x = hk.Linear(self._hidden_dim, w_init=initializer)(obs)
+        x = jax.nn.relu(x)
+        x = hk.Linear(self._hidden_dim, w_init=initializer)(x)
+        x = jax.nn.relu(x)
+        x = hk.Linear(self._action_dim, w_init=initializer)(x)
+        
+        x = jnp.tanh(x)
         return x * self._max_action
     
+
 class TD3Critic(hk.Module):
-    '''TD3 critic for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py.'''
-    def __init__(self, hidden_dim):
+    """TD3 critic for MuJoCo envs, from https://github.com/sfujim/TD3_BC/blob/main/TD3_BC.py."""
+    
+    def __init__(self, hidden_dim: int):
         super().__init__()
         
-        self.q1 = hk.nets.MLP(
+        initializer = hk.initializers.VarianceScaling(2.0, "fan_in",  "uniform")
+        
+        self._q1 = hk.nets.MLP(
             [hidden_dim, hidden_dim, 1],
-            w_init=INITIALIZERS['he_uniform'],
+            w_init=initializer,
             activation=jax.nn.relu,
             name='q1'
         )
         
-        self.q2 = hk.nets.MLP(
+        self._q2 = hk.nets.MLP(
             [hidden_dim, hidden_dim, 1],
-            w_init=INITIALIZERS['he_uniform'],
+            w_init=initializer,
             activation=jax.nn.relu,
             name='q2'
         )
         
-    def __call__(self, obs, action):
+    def __call__(self, obs: chex.Array, action: chex.Array) -> DoubleQOutputs:
         sa = jnp.concatenate([obs, action], axis=-1)
         
         # twin critic outputs
-        q1 = self.q1(sa)
-        q2 = self.q2(sa)
+        q1 = self._q1(sa)
+        q2 = self._q2(sa)
         
         return jnp.squeeze(q1), jnp.squeeze(q2)
     
 # ============================== SAC ==============================
-    
-# TODO: do we keep these hardcoded for DMC?
+
 MIN_LOG_STD = -5
 MAX_LOG_STD = 2
 
+
 class SACActor(hk.Module):
-    def __init__(self, action_shape, hidden_dim):
-        super().__init__()
-        
-        self.policy = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
-            jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
-            jax.nn.relu,
-            hk.Linear(2 * action_shape[0], w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros'])
-        ])
-        
-    def __call__(self, obs):
-        output = self.policy(obs)
-        mu, log_std = jnp.split(output, 2, -1)
-        log_std = MIN_LOG_STD + 0.5 * (MAX_LOG_STD - MIN_LOG_STD) * (log_std + 1)
-        
-        std = jnp.exp(log_std)
-        dist = squashed_normal_dist(mu, std)
-        return dist
+    """SAC actor."""
     
-class SACCritic(hk.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, action_dim: int, hidden_dim: int):
         super().__init__()
         
-        self.q1 = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
+        initializer = hk.initializers.Orthogonal(scale=1.0)
+        
+        self._policy = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
             jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
             jax.nn.relu,
-            hk.Linear(1, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros'])
+            hk.Linear(2 * action_dim, w_init=initializer, b_init=jnp.zeros)
         ])
         
-        self.q2 = hk.Sequential([
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
+    def __call__(self, obs: chex.Array) -> distrax.Distribution:
+        output = self._policy(obs)
+        
+        mu, log_std = jnp.split(output, 2, axis=-1)
+        log_std = MIN_LOG_STD + 0.5 * (MAX_LOG_STD - MIN_LOG_STD) * (log_std + 1)
+        std = jnp.exp(log_std)
+        
+        # get distribution and required transform
+        base_distribution = distrax.MultivariateNormalDiag(mu, std)
+        distribution = TanhTransformed(base_distribution)
+        
+        return distribution
+
+
+class SACCritic(hk.Module):
+    """Critic for SAC."""
+    
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        
+        initializer = hk.initializers.Orthogonal(scale=1.0)
+        
+        self._q1 = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
             jax.nn.relu,
-            hk.Linear(hidden_dim, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros']),
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
             jax.nn.relu,
-            hk.Linear(1, w_init=INITIALIZERS['linear_orthogonal'], b_init=INITIALIZERS['zeros'])
+            hk.Linear(1, w_init=initializer, b_init=jnp.zeros)
         ])
         
-    def __call__(self, obs, action):
+        self._q2 = hk.Sequential([
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
+            jax.nn.relu,
+            hk.Linear(hidden_dim, w_init=initializer, b_init=jnp.zeros),
+            jax.nn.relu,
+            hk.Linear(1, w_init=initializer, b_init=jnp.zeros)
+        ])
+        
+    def __call__(self, obs: chex.Array, action: chex.Array) -> DoubleQOutputs:
         obs_action = jnp.concatenate([obs, action], axis=-1)
-        q1 = self.q1(obs_action)
-        q2 = self.q2(obs_action)
+        
+        q1 = self._q1(obs_action)
+        q2 = self._q2(obs_action)
         
         return jnp.squeeze(q1), jnp.squeeze(q2)
 
 # ============================== BC ==============================
 
 class BCActor(hk.Module):
-    '''Behavioral cloning network.'''
-    def __init__(self, hidden_dim, action_shape):
+    """Network for behavioral cloning."""
+    
+    def __init__(self, hidden_dim: int, action_dim: int):
         super().__init__()
-        self._hidden_dim = hidden_dim
-        self._action_dim = action_shape[0]
         
-    def __call__(self, obs):
+        self._hidden_dim = hidden_dim
+        self._action_dim = action_dim
+        
+    def __call__(self, obs: chex.Array) -> distrax.Distribution:
         net = hk.nets.MLP(
             [self._hidden_dim, self._hidden_dim, 2 * self._action_dim],
             activation=jax.nn.relu
@@ -190,18 +228,21 @@ class BCActor(hk.Module):
         mean, log_std = jnp.split(out, 2, -1)
         std = jnp.exp(log_std)
         
-        dist = distrax.Normal(mean, std)
-        return dist
+        distribution = distrax.Normal(mean, std)
+        return distribution
     
 # ============================== DQN ==============================
 
 class DuelingDQN(hk.Module):
-    def __init__(self, action_dim):
-        super().__init__(name='dueling_dqn')
-        self.trunk = AtariEncoder()
-        self.mlp = DuelingMLP(action_dim)
+    """Dueling DQN network."""
+    
+    def __init__(self, action_dim: int):
+        super().__init__(name="dueling_dqn")
         
-    def __call__(self, x: jnp.ndarray):
-        z = self.trunk(x)
-        q = self.mlp(z)
+        self._trunk = AtariEncoder()
+        self._mlp = DuelingMLP(action_dim)
+        
+    def __call__(self, x: chex.Array) -> chex.Array:
+        z = self._trunk(x)
+        q = self._mlp(z)
         return q

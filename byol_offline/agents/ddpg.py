@@ -1,454 +1,360 @@
+import chex
+import haiku as hk
 import jax
 import jax.numpy as jnp
-import haiku as hk
 import optax
-from typing import NamedTuple
-import dill
+import distrax
+import gym
+import numpy as np
+from typing import NamedTuple, Tuple, Mapping
+from ml_collections import ConfigDict
 
-from byol_offline.models.byol_model import WorldModelTrainer
-from byol_offline.models.rnd_model import RNDModelTrainer
+from byol_offline.base_learner import ReinforcementLearner
+from byol_offline.data import Batch
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
-from byol_offline.networks.actor_critic import *
-from byol_offline.agents.agent_utils import *
-from utils import MUJOCO_ENVS, flatten_data, batched_zeros_like
-from memory.replay_buffer import Transition
+from byol_offline.networks.actor_critic import DDPGActor, DDPGCritic
+from byol_offline.types import NetworkFns, DoubleQOutputs, LossFnOutput, MetricsDict
 
-class DDPGTrainState(NamedTuple):
+from utils import is_pixel_based
+
+"""Deep deterministic policy gradient trainer implementation."""
+
+
+class DDPGState(NamedTuple):
+    """Training state for DDPG."""
+    
     encoder_params: hk.Params
     actor_params: hk.Params
     critic_params: hk.Params
-    critic_target_params: hk.Params
+    target_critic_params: hk.Params
     
     encoder_opt_state: optax.OptState
     actor_opt_state: optax.OptState
     critic_opt_state: optax.OptState
     
-    rng_key: jax.random.PRNGKey # updated every time we act or learn
+    rng_key: chex.PRNGKey
+    
+    
+def make_ddpg_networks(
+    config: ConfigDict,
+    observation_space: gym.Space,
+    action_space: gym.Space,
+) -> NetworkFns:
+    """Makes all functions needed for DDPG."""
+    
+    encoder_config = config.encoder
+    
+    def encoder_fn(observation: chex.Array) -> chex.Array:
+        if is_pixel_based(observation_space):
+            pixel_encoder_config = encoder_config.pixel
+            if pixel_encoder_config.type == "drqv2":
+                return DrQv2Encoder()(observation)
+            else:
+                return DreamerEncoder(pixel_encoder_config.depth)(observation)
+        else:
+            state_encoder_config = encoder_config.state
+            encoder = hk.nets.MLP(
+                state_encoder_config.hidden_dims, activation=jax.nn.swish
+            )
+            return encoder(observation)
+        
+    def actor_fn(observation: chex.Array, std: chex.Numeric) -> distrax.Distribution:
+        action_dim = action_space.shape[0]
+        actor = DDPGActor(action_dim, config.feature_dim, config.ac_hidden_dim)
+        return actor(observation, std)
+    
+    def critic_fn(observation: chex.Array, action: chex.Array) -> DoubleQOutputs:
+        critic = DDPGCritic(config.feature_dim, config.ac_hidden_dim)
+        return critic(observation, action)
+    
+    
+    encoder = hk.without_apply_rng(hk.transform(encoder_fn))
+    actor = hk.without_apply_rng(hk.transform(actor_fn))
+    critic = hk.without_apply_rng(hk.transform(critic_fn))
+    
+    return encoder, actor, critic
 
-class DDPG:
-    '''DDPG agent from DrQv2 (without the data augmentations).'''
-    def __init__(self, cfg, byol=None, rnd=None):
-        # SET UP
+
+class DDPGLearner(ReinforcementLearner):
+    """DDPG trainer."""
+    
+    def __init__(
+        self,
+        config: ConfigDict,
+        seed: int,
+        observation_space: gym.Space,
+        action_space: gym.Space,
+    ):
         
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
-        if cfg.task not in MUJOCO_ENVS:
-            if byol is None or cfg.aug == 'rnd':
-                encoder_fn = lambda obs: DrQv2Encoder()(obs)
-            else:
-                encoder_fn = lambda obs: DreamerEncoder(cfg.depth)(obs)
-        else:
-            encoder_fn = lambda obs: hk.nets.MLP(
-                [cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim, cfg.hidden_dim],
-                activation=jax.nn.swish
-            )(obs)
-        encoder = hk.without_apply_rng(hk.transform(encoder_fn))
-        
-        # actor + critic
-        actor_fn = lambda obs, std: DDPGActor(cfg.action_shape, cfg.feature_dim, cfg.hidden_dim)(obs, std)
-        actor = hk.without_apply_rng(hk.transform(actor_fn))
-        
-        critic_fn = lambda obs, action: DDPGCritic(cfg.feature_dim, cfg.hidden_dim)(obs, action)
-        critic = hk.without_apply_rng(hk.transform(critic_fn))
-        
-        # reward pessimism (currently using different encoder than the DrQv2 stuff--maybe have to change)
-        if cfg.aug == 'rnd':
-            assert rnd is not None, "Can't use RND when model doesn't exist."
-            assert type(rnd) == RNDModelTrainer, "Not an RND model trainer--BAD!"
-            def aug_fn(obs, acts):
-                # dummy step because we delete it anyway
-                return rnd._compute_uncertainty(obs, acts, 0)
-        elif cfg.aug == 'byol':
-            assert byol is not None, "Can't use BYOL-Explore when model doesn't exist."
-            assert type(byol) == WorldModelTrainer, "Not a BYOL-Explore model trainer--BAD!"
-            def aug_fn(obs, acts):
-                # dummy step again because we delete it
-                return byol._compute_uncertainty(obs, acts, 0)
-        else:
-            # no reward pessimism
-            def aug_fn(obs, acts):
-                return 0.0
+        encoder, actor, critic = make_ddpg_networks(config, observation_space, action_space)
         
         # initialization
-        rng = jax.random.PRNGKey(cfg.seed)
-        key1, key2, key3, key4 = jax.random.split(rng, 4)
+        key = jax.random.PRNGKey(seed)
+        encoder_key, actor_key, critic_key, state_key = jax.random.split(key, 4)
+        representation_dim = (
+            config.encoder.state.hidden_dims[-1] if not is_pixel_based(observation_space)
+            else 20000 if config.encoder.pixel.type == "drqv2"
+            else 4096
+        )
         
-        encoder_params = encoder.init(key1, batched_zeros_like(cfg.obs_shape))
+        observations = observation_space.sample()
+        if isinstance(observations, Mapping):
+            observations = observations["pixels"]
+            H, W, C, S = observations.shape
+            observations = np.reshape(observations, (H, W, C * S))
+        actions = action_space.sample()
+        representation_zeros = jnp.zeros((1, representation_dim))
         
-        if cfg.task not in MUJOCO_ENVS:
-            if byol is None or cfg.aug == 'rnd':
-                actor_params = actor.init(key2, batched_zeros_like(20000), jnp.zeros(1))
-                critic_params = critic_target_params = critic.init(key3, batched_zeros_like(20000), batched_zeros_like(cfg.action_shape))
-            else:
-                actor_params = actor.init(key2, batched_zeros_like(4096), jnp.zeros(1))
-                critic_params = critic_target_params = critic.init(key3, batched_zeros_like(4096), batched_zeros_like(cfg.action_shape))
-        else:
-            actor_params = actor.init(key2, batched_zeros_like(cfg.hidden_dim), jnp.zeros(1))
-            critic_params = critic_target_params = critic.init(key3, batched_zeros_like(cfg.hidden_dim), batched_zeros_like(cfg.action_shape))
+        # params
+        encoder_params = encoder.init(encoder_key, observations)
+        actor_params = actor.init(actor_key, representation_zeros, jnp.zeros(1))
+        critic_params = target_critic_params = critic.init(
+            critic_key, representation_zeros, actions
+        )
         
         # optimizers
-        encoder_opt = optax.adam(cfg.encoder_lr)
-        encoder_opt_state = encoder_opt.init(encoder_params)
+        encoder_optimizer = optax.adam(config.encoder_lr)
+        encoder_opt_state = encoder_optimizer.init(encoder_params)
         
-        actor_opt = optax.adam(cfg.actor_lr)
-        actor_opt_state = actor_opt.init(actor_params)
+        actor_optimizer = optax.adam(config.actor_lr)
+        actor_opt_state = actor_optimizer.init(actor_params)
         
-        critic_opt = optax.adam(cfg.critic_lr)
-        critic_opt_state = critic_opt.init(critic_params)
+        critic_optimizer = optax.adam(config.critic_lr)
+        critic_opt_state = critic_optimizer.init(critic_params)
         
-        # train state
-        self.train_state = DDPGTrainState(
+        # training state
+        self._state = DDPGState(
             encoder_params=encoder_params,
             actor_params=actor_params,
             critic_params=critic_params,
-            critic_target_params=critic_target_params,
+            target_critic_params=target_critic_params,
+            
             encoder_opt_state=encoder_opt_state,
             actor_opt_state=actor_opt_state,
             critic_opt_state=critic_opt_state,
-            rng_key=key4
+            
+            rng_key=state_key
         )
         
-        # hyperparameters for training
-        reward_min = cfg.reward_min
-        reward_max = cfg.reward_max
-        lam = cfg.lam
-        ema = cfg.ema
-        init_std = cfg.init_std
-        final_std = cfg.final_std
-        std_duration = cfg.std_duration
-        std_clip_val = cfg.std_clip_val
-        self.update_every_steps = cfg.update_every_steps
+        # ---- hyperparameters for training -----
+        
+        discount = config.discount
+        ema = config.ema
+        init_std = config.init_std
+        final_std = config.final_std
+        std_duration = config.std_duration
+        std_clip_val = config.std_clip_val
+        update_every_steps = config.update_every_steps
         
         # =================== START OF ALL FNS ===================
         
-        def stddev_schedule(step: int):
-            '''Linear standard deviation schedule.'''
+        def stddev_schedule(step: int) -> float:
+            """Linear standard deviation schedule."""
+            
             mix = jnp.clip(step / std_duration, 0.0, 1.0)
             return (1.0 - mix) * init_std + mix * final_std
         
-        def act(obs: jnp.ndarray, step: int, eval_mode: bool):
-            '''Choose an action to execute in env.'''
-            rng, key = jax.random.split(self.train_state.rng_key)
+        def act(
+            state: DDPGState, obs: jnp.ndarray, step: int, eval: bool
+        ) -> Tuple[DDPGState, chex.Array]:
+            """Action selection function."""
             
-            encoder_params = self.train_state.encoder_params
-            features = encoder.apply(encoder_params, obs) # don't need batch dim here
+            sample_key, key = jax.random.split(state.rng_key)
             
+            features = encoder.apply(state.encoder_params, obs) # don't need batch dim here
             std = stddev_schedule(step)
-            actor_params = self.train_state.actor_params
-            dist = actor.apply(actor_params, features, std)
+            distribution = actor.apply(state.actor_params, features, std)
             
-            mean = dist.mean()
-            sample = dist.sample(seed=key, clip=std_clip_val)
-            action = jnp.where(eval_mode, mean, sample)
+            mean = distribution.mode()
+            sample = distribution.sample(seed=sample_key, clip=std_clip_val)
+            action = jnp.where(eval, mean, sample)
             
-            self.train_state = self.train_state._replace(
-                rng_key=rng
-            ) # no need to return, as this is not jitted
-            
-            return action
-        
-        def get_aug(observations: jnp.ndarray, actions: jnp.ndarray):
-            return aug_fn(observations, actions)
+            new_state = self._state._replace(rng_key=key)
+            return new_state, action
     
         # =================== WARMSTARTING ===================
         
-        @jax.jit
-        def bc_loss(encoder_params: hk.Params,
-                    actor_params: hk.Params,
-                    obs: jnp.ndarray,
-                    actions: jnp.ndarray,
-                    key: jax.random.PRNGKey,
-                    step: int):
+        def bc_loss(
+            encoder_params: hk.Params, actor_params: hk.Params,
+            batch: Batch, key: chex.PRNGKey, step: int
+        ) -> LossFnOutput:
+            """BC warmstarting loss function."""
+            
             std = stddev_schedule(step)
-            features = encoder.apply(encoder_params, obs) # no need to expand batch dim
-            dist = actor.apply(actor_params, features, std)
+            features = encoder.apply(encoder_params, batch.observations) # no need to expand batch dim
+            distribution = actor.apply(actor_params, features, std)
             
-            sampled_actions = dist.sample(seed=key, clip=std_clip_val)
-            loss = jnp.mean(jnp.square(sampled_actions - actions)) # mse loss, exactly like DrQ + BC
-            return loss
+            sampled_actions = distribution.sample(seed=key, clip=std_clip_val)
+            loss = jnp.mean(jnp.square(sampled_actions - batch.actions)) # mse loss, exactly like DrQ + BC
+            return loss, {"bc_loss": loss}
         
-        def bc_update(train_state: DDPGTrainState, transitions: Transition, step: int):
-            rng, key = jax.random.split(train_state.rng_key)
+        
+        def bc_update(state: DDPGState, batch: Batch, step: int) -> Tuple[DDPGState, MetricsDict]:
+            update_key, state_key = jax.random.split(state.rng_key)
             
-            loss_grad_fn = jax.value_and_grad(bc_loss, argnums=(0, 1))
-            loss, (encoder_grads, actor_grads) = loss_grad_fn(train_state.encoder_params, train_state.actor_params, transitions.obs, transitions.actions, key, step)
-            
-            # encoder update
-            enc_update, new_enc_opt_state = encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
-            new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
-            
-            # actor update
-            act_update, new_act_opt_state = actor_opt.update(actor_grads, train_state.actor_opt_state)
-            new_actor_params = optax.apply_updates(train_state.actor_params, act_update)
-            
-            new_train_state = train_state._replace(
-                encoder_params=new_enc_params,
-                actor_params=new_actor_params,
-                encoder_opt_state=new_enc_opt_state,
-                actor_opt_state=new_act_opt_state,
-                rng_key=rng
+            loss_grad_fn = jax.grad(bc_loss, argnums=(0, 1), has_aux=True)
+            (encoder_grads, actor_grads), metrics = loss_grad_fn(
+                state.encoder_params, state.actor_params,
+                batch.observations, batch.actions, update_key, step
             )
             
-            return new_train_state, {'bc_loss': loss}
+            # encoder update
+            encoder_update, new_encoder_opt_state = encoder_optimizer.update(encoder_grads, state.encoder_opt_state)
+            new_encoder_params = optax.apply_updates(state.encoder_params, encoder_update)
+            
+            # actor update
+            actor_update, new_actor_opt_state = actor_optimizer.update(actor_grads, state.actor_opt_state)
+            new_actor_params = optax.apply_updates(state.actor_params, actor_update)
+            
+            new_state = state._replace(
+                encoder_params=new_encoder_params,
+                actor_params=new_actor_params,
+                
+                encoder_opt_state=new_encoder_opt_state,
+                actor_opt_state=new_actor_opt_state,
+                
+                rng_key=state_key
+            )
+            return new_state, metrics
         
-        # =================== AGENT LOSS/UPDATE FUNCTIONS ===================
+        # ----- define RL loss/update functions -----
         
-        @jax.jit
-        def critic_loss_byol(encoder_params: hk.Params,
-                             critic_params: hk.Params,
-                             critic_target_params: hk.Params,
-                             actor_params: hk.Params,
-                             transitions: Transition,
-                             key: jax.random.PRNGKey,
-                             step: int):
-            # get reward penalty
-            reward_pen = get_aug(transitions.obs, transitions.actions)
-            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max)
-            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
-
-            # flatten data, as this is BYOL critic loss (we've already added reward so no need to treat as sequence anymore)
-            transitions = flatten_data(transitions)
+        def critic_loss(
+            encoder_params: hk.Params, critic_params: hk.Params,
+            target_critic_params: hk.Params, actor_params: hk.Params,
+            batch: Batch, key: chex.PRNGKey, step: int
+        ) -> LossFnOutput:
+            """DDPG critic loss."""
             
             # encode observations
-            features = encoder.apply(encoder_params, transitions.obs)
-            next_features = encoder.apply(encoder_params, transitions.next_obs)
+            features = encoder.apply(encoder_params, batch.observations)
+            next_features = encoder.apply(encoder_params, batch.next_observations)
             
             # get the targets
             std = stddev_schedule(step)
-            dist = actor.apply(actor_params, next_features, std)
-            next_actions = dist.sample(seed=key, clip=std_clip_val)
+            distribution = actor.apply(actor_params, next_features, std)
+            next_actions = distribution.sample(seed=key, clip=std_clip_val)
             
-            nq1, nq2 = critic.apply(critic_target_params, next_features, next_actions)
-            nv = jnp.squeeze(jnp.minimum(nq1, nq2))
-            target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * nv)
+            # get target Q values
+            nq1, nq2 = critic.apply(target_critic_params, next_features, next_actions)
+            nv = jnp.minimum(nq1, nq2)
+            target_q = jax.lax.stop_gradient(batch.rewards + discount * batch.masks * nv)
 
-            # get the actual q values
-            q1, q2 = critic.apply(critic_params, features, transitions.actions)
+            # get the current Q values
+            q1, q2 = critic.apply(critic_params, features, batch.actions)
             
+            # compute loss, and return
             q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
-            return q_loss
-
-        @jax.jit
-        def critic_loss_rnd(encoder_params: hk.Params,
-                            critic_params: hk.Params,
-                            critic_target_params: hk.Params, 
-                            actor_params: hk.Params,
-                            transitions: Transition,
-                            key, step):
-            # get reward penalty
-            reward_pen = get_aug(transitions.obs, transitions.actions)
-            penalized_rewards = get_penalized_rewards(transitions.rewards, reward_pen, lam, reward_min, reward_max)
-            transitions = transitions._replace(rewards=penalized_rewards) # don't want extra gradients going back to encoder params
-
-            # encode observations
-            features = encoder.apply(encoder_params, transitions.obs)
-            next_features = encoder.apply(encoder_params, transitions.next_obs)
-            
-            # get the targets
-            std = stddev_schedule(step)
-            dist = actor.apply(actor_params, next_features, std)
-            next_actions = dist.sample(seed=key, clip=std_clip_val)
-            
-            nq1, nq2 = critic.apply(critic_target_params, next_features, next_actions)
-            nv = jnp.squeeze(jnp.minimum(nq1, nq2))
-            target_q = jax.lax.stop_gradient(transitions.rewards + cfg.discount * (1.0 - transitions.dones) * nv)
-
-            # get the actual q values
-            q1, q2 = critic.apply(critic_params, features, transitions.actions)
-            
-            q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
-            return q_loss
+            return q_loss, {"critic_loss": q_loss}
         
-        @jax.jit
-        def actor_loss_byol(actor_params: hk.Params,
-                            encoder_params: hk.Params,
-                            critic_params: hk.Params,
-                            transitions: Transition,
-                            key: jax.random.PRNGKey,
-                            step: int):
-            # flatten data
-            transitions = flatten_data(transitions)
+        
+        def actor_loss(
+            actor_params: hk.Params, encoder_params: hk.Params,
+            critic_params: hk.Params, batch: Batch,
+            key: chex.PRNGKey, step: int
+        ) -> LossFnOutput:
+            """Actor loss function."""
 
             # encode observations
-            features = encoder.apply(encoder_params, transitions.obs)
+            features = encoder.apply(encoder_params, batch.observations)
             features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through no matter what
 
             std = stddev_schedule(step)
-            dist = actor.apply(actor_params, features, std)
-            actions = dist.sample(seed=key, clip=std_clip_val)
+            distribution = actor.apply(actor_params, features, std)
+            actions = distribution.sample(seed=key, clip=std_clip_val)
             
             q1, q2 = critic.apply(critic_params, features, actions)
-            actor_loss = -jnp.mean(jnp.minimum(q1, q2))
-            return actor_loss
-        
-        @jax.jit
-        def actor_loss_rnd(actor_params: hk.Params,
-                           encoder_params: hk.Params,
-                           critic_params: hk.Params,
-                           transitions: Transition,
-                           key: jax.random.PRNGKey,
-                           step: int):
-            # encode observations
-            features = encoder.apply(encoder_params, transitions.obs)
-            features = jax.lax.stop_gradient(features) # just so we don't have to deal with gradients passing through no matter what
-
-            std = stddev_schedule(step)
-            dist = actor.apply(actor_params, features, std)
-            actions = dist.sample(seed=key, clip=std_clip_val)
+            q = jnp.minimum(q1, q2)
+            actor_loss = -jnp.mean(q)
             
-            q1, q2 = critic.apply(critic_params, features, actions)
-            actor_loss = -jnp.mean(jnp.minimum(q1, q2))
-            return actor_loss
+            return actor_loss, {"actor_loss": actor_loss, "q1": jnp.mean(q1)}
         
-        @jax.jit
-        def update_critic(train_state: DDPGTrainState,
-                          transitions: Transition,
-                          key: jax.random.PRNGKey,
-                          step: int):
+        
+        def update_critic(
+            state: DDPGState, batch: Batch,
+            key: chex.PRNGKey, step: int
+        ) -> Tuple[DDPGState, MetricsDict]:
+            """Update the critic."""
+            
             # assume that the transitions is a sequence of consecutive (s, a, r, s', d) tuples
-            if cfg.aug == 'byol':
-                loss_grad_fn = jax.value_and_grad(critic_loss_byol, argnums=(0, 1))
-            else:
-                loss_grad_fn = jax.value_and_grad(critic_loss_rnd, argnums=(0, 1))
+            grad_fn = jax.grad(critic_loss, argnums=(0, 1), has_aux=True)
             
-            loss, (encoder_grads, critic_grads) = loss_grad_fn(
-                train_state.encoder_params,
-                train_state.critic_params,
-                train_state.critic_target_params,
-                train_state.actor_params,
-                transitions,
-                key,
-                step
+            (encoder_grads, critic_grads), metrics = grad_fn(
+                state.encoder_params,
+                state.critic_params,
+                state.target_critic_params,
+                state.actor_params,
+                batch, key, step
             )
             
             # update both encoder and critic
-            enc_update, new_enc_opt_state = encoder_opt.update(encoder_grads, train_state.encoder_opt_state)
-            new_enc_params = optax.apply_updates(train_state.encoder_params, enc_update)
+            enc_update, new_encoder_opt_state = encoder_optimizer.update(encoder_grads, state.encoder_opt_state)
+            new_encoder_params = optax.apply_updates(state.encoder_params, enc_update)
             
-            critic_update, new_critic_opt_state = critic_opt.update(critic_grads, train_state.critic_opt_state)
-            new_critic_params = optax.apply_updates(train_state.critic_params, critic_update)
+            critic_update, new_critic_opt_state = critic_optimizer.update(critic_grads, state.critic_opt_state)
+            new_critic_params = optax.apply_updates(state.critic_params, critic_update)
             
-            metrics = {
-                'critic_loss': loss
-            }
-            
-            new_vars = {
-                'encoder_params': new_enc_params,
-                'encoder_opt_state': new_enc_opt_state,
-                'critic_params': new_critic_params,
-                'critic_opt_state': new_critic_opt_state
-            }
-            return metrics, new_vars
+            new_state = state._replace(
+                encoder_params=new_encoder_params,
+                critic_params=new_critic_params,
+                
+                encoder_opt_state=new_encoder_opt_state,
+                critic_opt_state=new_critic_opt_state,
+            )
+            return new_state, metrics
         
-        @jax.jit
-        def update_actor(train_state: DDPGTrainState,
-                         transitions: Transition,
-                         key: jax.random.PRNGKey,
-                         step: int):
-            if cfg.aug == 'byol':
-                loss_grad_fn = jax.value_and_grad(actor_loss_byol)
-            else:
-                loss_grad_fn = jax.value_and_grad(actor_loss_rnd)
-            
-            a_loss, a_grads = loss_grad_fn(train_state.actor_params,
-                                           train_state.encoder_params,
-                                           train_state.critic_params,
-                                           transitions,
-                                           key,
-                                           step)
+        
+        def update_actor(
+            state: DDPGState, batch: Batch,
+            key: jax.random.PRNGKey, step: int
+        ) -> Tuple[DDPGState, MetricsDict]:
+            """Update the actor."""
+                
+            grad_fn = jax.grad(actor_loss, has_aux=True)
+            grads, metrics = grad_fn(
+                state.actor_params,
+                state.encoder_params,
+                state.critic_params,
+                batch, key, step
+            )
             
             # update actor only
-            actor_update, new_actor_opt_state = actor_opt.update(a_grads, train_state.actor_opt_state)
-            new_actor_params = optax.apply_updates(actor_update, train_state.actor_params)
+            actor_update, new_actor_opt_state = actor_optimizer.update(grads, state.actor_opt_state)
+            new_actor_params = optax.apply_updates(actor_update, state.actor_params)
             
-            metrics = {
-                'actor_loss': a_loss
-            }
-            
-            new_vars = {
-                'actor_params': new_actor_params,
-                'actor_opt_state': new_actor_opt_state
-            }
-            return metrics, new_vars
+            new_state = state._replace(
+                actor_parms=new_actor_params,
+                actor_opt_state=new_actor_opt_state,
+            )
+            return new_state, metrics
         
-        def update(train_state: DDPGTrainState,
-                   transitions: Transition,
-                   step: int):
+        
+        def update(state: DDPGState, batch: Batch, step: int) -> Tuple[DDPGState, MetricsDict]:
+            """Full update."""
             
-            key1, key2, key3 = jax.random.split(train_state.rng_key, 3)
+            if step % update_every_steps != 0:
+                return state, {}
             
-            def update_all():
-                '''Actually update everything.'''
-                # critic update
-                critic_metrics, critic_new_vars = update_critic(
-                    train_state,
-                    transitions,
-                    key1,
-                    step
-                )
-                
-                upd_train_state = train_state._replace(
-                    encoder_params=critic_new_vars['encoder_params'],
-                    critic_params=critic_new_vars['critic_params'],
-                    encoder_opt_state=critic_new_vars['encoder_opt_state'],
-                    critic_opt_state=critic_new_vars['critic_opt_state']
-                )
-                
-                # update actor
-                actor_metrics, actor_new_vars = update_actor(
-                    upd_train_state,
-                    transitions,
-                    key2,
-                    step
-                )
-                
-                upd_train_state = upd_train_state._replace(
-                    actor_params=actor_new_vars['actor_params'],
-                    actor_opt_state=actor_new_vars['actor_opt_state']
-                )
-                
-                # update critic target
-                new_target_params = update_target(
-                    upd_train_state.critic_params,
-                    upd_train_state.critic_target_params,
-                    ema
-                )
-                
-                new_train_state = upd_train_state._replace(
-                    critic_target_params=new_target_params,
-                    rng_key=key3
-                )
-                
-                # logging
-                metrics = {**critic_metrics, **actor_metrics}
-                return new_train_state, metrics
+            critic_key, actor_key, state_key = jax.random.split(state.rng_key, 3)
             
-            empty_dict = {
-                'critic_loss': jnp.inf,
-                'actor_loss': jnp.inf
-            } # just have to make it so we don't log these
-            curr_state = (train_state, empty_dict)
+            # update critic and actor
+            state, critic_metrics = update_critic(state, batch, critic_key, step)
+            state, actor_metrics = update_actor(state, batch, actor_key, step)
             
-            out = jax.lax.cond(step % self.update_every_steps == 0,
-                               lambda _: update_all(),
-                               lambda _: curr_state,
-                               operand=None)
+            # update target parameters
+            new_target_critic_params = optax.incremental_update(
+                state.critic_params, state.target_critic_params, ema
+            )
+            state = state._replace(
+                target_critic_params=new_target_critic_params,
+                rng_key=state_key
+            )
             
-            return out
+            return state, {
+                **critic_metrics, **actor_metrics
+            }
         
         self._act = act
         self._bc_update = jax.jit(bc_update)
         self._update = jax.jit(update)
-
-    def save(self, model_path):
-        with open(model_path, 'wb') as f:
-            dill.dump(self.train_state, f, protocol=2)
-            
-    def load(self, model_path):
-        try:
-            with open(model_path, 'rb') as f:
-                train_state = dill.load(f)
-            self.train_state = train_state
-        except FileNotFoundError:
-            print('cannot load DDPG')
-            return None
-        

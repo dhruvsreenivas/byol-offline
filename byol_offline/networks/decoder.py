@@ -1,49 +1,61 @@
+import chex
+import haiku as hk
 import jax
 import jax.numpy as jnp
-import haiku as hk
-from byol_offline.networks.network_utils import INITIALIZERS
+
+"""Various decoder modules."""
 
 class DrQv2Decoder(hk.Module):
-    '''Reverse of DrQv2 encoder basically.'''
-    def __init__(self, in_channel):
+    """DrQv2 decoder. Reverse of DrQv2 encoder."""
+    
+    def __init__(self, in_channel: int):
         super().__init__()
         
-        self.convnet = hk.Sequential([
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
+        self._initializer = hk.initializers.Orthogonal(scale=jnp.sqrt(2))
+        self._convnet = hk.Sequential([
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding="VALID", w_init=self._initializer),
             jax.nn.relu,
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding="VALID", w_init=self._initializer),
             jax.nn.relu,
-            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(32, kernel_shape=3, stride=1, padding="VALID", w_init=self._initializer),
             jax.nn.relu,
-            hk.Conv2DTranspose(in_channel, kernel_shape=3, stride=2, padding='VALID', w_init=INITIALIZERS['conv2d_orthogonal']),
+            hk.Conv2DTranspose(in_channel, kernel_shape=3, stride=2, padding="VALID", w_init=self._initializer),
         ])
     
-    def __call__(self, x):
+    def __call__(self, x: chex.Array) -> chex.Array:
+        
         out_dim = 20000
-        x = hk.Linear(out_dim)(x)
+        
+        # first preprocess
+        x = hk.Linear(out_dim, w_init=self._initializer)(x)
         x = jnp.reshape(x, (-1, 25, 25, 32))
-        return self.convnet(x)
+        
+        # return conv output
+        return self._convnet(x)
+
     
 class DreamerDecoder(hk.Module):
-    '''Dreamer decoder from DreamerV2.'''
-    def __init__(self, in_channel, depth):
+    """DreamerV2 decoder."""
+    
+    def __init__(self, in_channel: int, depth: int):
         super().__init__()
         self._depth = depth
         
-        self.convnet = hk.Sequential([
-            hk.Conv2DTranspose(depth * 4, kernel_shape=5, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
+        self._initializer = hk.initializers.VarianceScaling(1.0, "fan_avg", distribution="uniform")
+        self._convnet = hk.Sequential([
+            hk.Conv2DTranspose(depth * 4, kernel_shape=5, stride=2, padding="VALID", w_init=self._initializer),
             jax.nn.elu,
-            hk.Conv2DTranspose(depth * 2, kernel_shape=5, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(depth * 2, kernel_shape=5, stride=2, padding="VALID", w_init=self._initializer),
             jax.nn.elu,
-            hk.Conv2DTranspose(depth, kernel_shape=6, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(depth, kernel_shape=6, stride=2, padding="VALID", w_init=self._initializer),
             jax.nn.elu,
-            hk.Conv2DTranspose(in_channel, kernel_shape=6, stride=2, padding='VALID', w_init=INITIALIZERS['xavier_uniform']),
+            hk.Conv2DTranspose(in_channel, kernel_shape=6, stride=2, padding="VALID", w_init=self._initializer),
         ])
         
-    def __call__(self, x):
-        # (B, feature_dim)
+    def __call__(self, x: chex.Array) -> chex.Array:
         out_dim = 32 * self._depth
-        x = hk.Linear(out_dim)(x)
+        
+        x = hk.Linear(out_dim, w_init=self._initializer)(x)
         x = jnp.reshape(x, (x.shape[0], 1, 1, out_dim))
-        mean = self.convnet(x)
+        mean = self._convnet(x)
         return mean

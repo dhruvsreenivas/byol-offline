@@ -1,43 +1,57 @@
+import chex
+import haiku as hk
 import jax
 import jax.numpy as jnp
-import haiku as hk
 import optax
 import distrax
-from typing import NamedTuple
-import dill
+import gym
+from typing import NamedTuple, Tuple
+from ml_collections import ConfigDict
 
-from utils import MUJOCO_ENVS, batched_zeros_like
+from byol_offline.base_learner import Learner
+from byol_offline.data import Batch
+from byol_offline.types import LossFnOutput, MetricsDict
 
-class AETrainState(NamedTuple):
+"""Simple one-step autoencoder modules."""
+
+
+class AEState(NamedTuple):
+    """Autoencoder training state."""
+    
     ae_params: hk.Params
     ae_opt_state: optax.OptState
     rng_key: jax.random.PRNGKey
     
+
 class DeterVAEOutput(NamedTuple):
+    """VAE output."""
+    
     latent_dist: distrax.Distribution
     rec_output: jnp.ndarray
-    
+
+
 class CondAE(hk.Module):
-    '''Conditional AE from https://github.com/shidilrzf/Anti-exploration-RL/blob/1013a85b4b84656a06f86abee01c55a5e08272ee/rlkit/torch/networks.py#L215'''
-    def __init__(self, cfg):
+    """Conditional AE from https://github.com/shidilrzf/Anti-exploration-RL/blob/1013a85b4b84656a06f86abee01c55a5e08272ee/rlkit/torch/networks.py#L215."""
+    
+    def __init__(self, config: ConfigDict):
         super().__init__()
         
-        assert len(cfg.obs_shape) == 1, 'this CondAE only supports mujoco based envs'
-        self._state_embed_dim = cfg.state_embed_dim
-        self._action_embed_dim = cfg.action_embed_dim
+        assert len(config.observation_dim) == 1, "This CondAE only supports MuJoCo based envs."
+        self._state_embed_dim = config.state_embed_dim
+        self._action_embed_dim = config.action_embed_dim
         
         self._encoder = hk.nets.MLP(
-            [cfg.hidden_dim, cfg.hidden_dim, cfg.feature_dim],
+            [*config.hidden_dims, config.feature_dim],
             activation=jax.nn.relu,
             activate_final=False
         )
         self._decoder = hk.nets.MLP(
-            [cfg.hidden_dim, cfg.hidden_dim, cfg.action_shape[0]],
+            [*config.hidden_dims, config.action_dim],
             activation=jax.nn.relu,
             activate_final=False
         )
         
-    def __call__(self, s, a):
+    def __call__(self, s: chex.Array, a: chex.Array) -> chex.Array:
         # encode
         zs = hk.Linear(self._state_embed_dim)(s)
         za = hk.Linear(self._action_embed_dim)(a)
@@ -49,30 +63,35 @@ class CondAE(hk.Module):
         ahat = self._decoder(zs)
         return ahat
     
+
 class VAE(hk.Module):
-    '''VAE from the Offline RL as Anti-Exploration paper (https://arxiv.org/pdf/2106.06431.pdf)'''
-    def __init__(self, cfg):
+    """VAE from the Offline RL as Anti-Exploration paper (https://arxiv.org/pdf/2106.06431.pdf)."""
+    
+    def __init__(self, config: ConfigDict):
         super().__init__()
-        assert len(cfg.obs_shape) == 1, 'this VAE only supports mujoco based envs'
-        self._feature_dim = cfg.feature_dim
+        
+        assert len(config.observation_dim) == 1, """This VAE only supports mujoco based envs."""
+        self._feature_dim = config.feature_dim
         
         self._encoder = hk.nets.MLP(
-            [cfg.hidden_dim, cfg.hidden_dim],
+            config.hidden_dims,
             activation=jax.nn.relu,
             activate_final=False
         )
         self._decoder = hk.nets.MLP(
-            [cfg.hidden_dim, cfg.hidden_dim, cfg.action_shape[0]],
+            [*config.hidden_dims, config.action_dim],
             activation=jax.nn.relu,
             activate_final=False
         )
-        self._activate_final = cfg.activate_final
-        self._clip_log_std = cfg.clip_log_std
-        
-    def __call__(self, s, a):
+        self._activate_final = config.activate_final
+        self._clip_log_std = config.clip_log_std
+    
+    
+    def __call__(self, s: chex.Array, a: chex.Array) -> DeterVAEOutput:
         # encode (embed first apparently)
         sa = jnp.concatenate([s, a], axis=-1)
         sa_rep = self._encoder(sa)
+        
         mean = hk.Linear(self._feature_dim)(sa_rep)
         logstd = hk.Linear(self._feature_dim)(sa_rep)
         if self._clip_log_std:
@@ -87,49 +106,75 @@ class VAE(hk.Module):
             ahat = jnp.tanh(ahat)
         
         return DeterVAEOutput(latent_dist=dist, rec_output=ahat)
-        
-class AETrainer:
-    def __init__(self, cfg):
-        assert cfg.task in MUJOCO_ENVS, "VAE doesn't support DMC or Atari envs just yet -- prob best to go RND there."
-        
-        # set up net
-        if cfg.type == 'vae':
-            ae_fn = lambda s, a: VAE(cfg)(s, a)
-        elif cfg.type == 'cond_ae':
-            ae_fn = lambda s, a: CondAE(cfg)(s, a)
+    
+    
+def make_ae_network(config: ConfigDict) -> hk.Transformed:
+    """Makes Haiku transformed functions for autoencoders."""
+    
+    def ae_fn(x: chex.Array, a: chex.Array) -> chex.Array:
+        if config.ae_type == "vae":
+            network_cls = VAE
         else:
-            raise NotImplementedError('No other AE methods implemented here.')
-        ae = hk.transform(ae_fn, apply_rng=True) # need for sampling for VAE, not for AE
+            network_cls = CondAE
+            
+        network = network_cls(config)
+        return network(x, a)
+    
+    ae = hk.transform(ae_fn)
+    return ae
+
+
+class AutoEncoderLearner(Learner):
+    """Autoencoder trainer."""
+    
+    def __init__(
+        self,
+        config: ConfigDict,
+        seed: int,
+        observation_space: gym.Space,
+        action_space: gym.Space,
+    ):
         
-        key = jax.random.PRNGKey(cfg.seed)
+        # initialize net function
+        ae = make_ae_network(config)
+        
+        # initialize parameters
+        key = jax.random.PRNGKey(seed)
         init_key, state_key = jax.random.split(key)
-        params = ae.init(init_key, batched_zeros_like(cfg.obs_shape), batched_zeros_like(cfg.action_shape))
+        observations = observation_space.sample()
+        actions = action_space.sample()
         
-        opt = optax.adam(learning_rate=cfg.lr)
+        params = ae.init(init_key, observations, actions)
+        
+        opt = getattr(optax, config.optimizer_class)(config.learning_rate)
         opt_state = opt.init(params)
         
-        self.train_state = AETrainState(
+        self._state = AEState(
             ae_params=params,
             ae_opt_state=opt_state,
             rng_key=state_key
         )
         
         # hparams
-        feature_dim = cfg.feature_dim
-        beta = cfg.beta
+        feature_dim = config.feature_dim
+        beta = config.beta
         
-        # define loss functions + uncertainty bonus
-        @jax.jit
-        def loss_fn(params, key, obs, actions):
-            output = ae.apply(params, key, obs, actions)
+        # ----- define loss + update functions and uncertainty bonus -----
+        
+        def loss_fn(
+            params: hk.Params, key: chex.PRNGKey, batch: Batch,
+        ) -> LossFnOutput:
+            """Autoencoder loss function."""
             
-            if cfg.type == 'cond_ae':
-                loss = jnp.mean(jnp.square(output - actions))
-                extras = None
+            output = ae.apply(params, key, batch.observations, batch.actions)
+            
+            if config.ae_type == "cond_ae":
+                loss = jnp.mean(jnp.square(output - batch.actions))
+                metrics = {"loss": loss}
             else:
                 post_dist = output.latent_dist
                 rec_output = output.rec_output
-                rec_loss = jnp.mean(jnp.square(rec_output - actions))
+                rec_loss = jnp.mean(jnp.square(rec_output - batch.actions))
                 
                 standard_gaussian = distrax.MultivariateNormalDiag(
                     jnp.zeros((feature_dim,)),
@@ -138,54 +183,52 @@ class AETrainer:
                 kl = post_dist.kl_divergence(standard_gaussian)
                 kl = jnp.mean(kl)
                 loss = rec_loss + beta * kl # want to minimize KL and reconstruction loss
-                extras = {'rec_loss': rec_loss, 'kl': kl}
+                metrics = {"loss": loss, "rec_loss": rec_loss, "kl": kl}
             
-            return loss, extras
+            return loss, metrics
         
-        def update(train_state: AETrainState, obs: jnp.ndarray, actions: jnp.ndarray, step: int):
+        
+        def update(
+            state: AEState, batch: Batch, step: int
+        ) -> Tuple[AEState, MetricsDict]:
+            """Autoencoder update step."""
+            
             del step
-            update_key, state_key = jax.random.split(train_state.rng_key)
+            update_key, state_key = jax.random.split(state.rng_key)
             
-            loss_grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-            (loss, extras), grads = loss_grad_fn(train_state.ae_params, update_key, obs, actions)
+            loss_grad_fn = jax.grad(loss_fn, has_aux=True)
+            grads, metrics = loss_grad_fn(state.ae_params, update_key, batch)
             
-            update, new_opt_state = opt.update(grads, train_state.ae_opt_state)
-            new_params = optax.apply_updates(train_state.ae_params, update)
+            update, new_opt_state = opt.update(grads, state.ae_opt_state)
+            new_params = optax.apply_updates(state.ae_params, update)
             
-            new_state = AETrainState(
+            new_state = AEState(
                 ae_params=new_params,
                 ae_opt_state=new_opt_state,
                 rng_key=state_key
             )
-            metrics = {'loss': loss}
-            if cfg.type == 'vae':
-                metrics.update(extras)
-                
             return new_state, metrics
         
-        def compute_uncertainty(obs, actions):
-            if cfg.type == 'vae':
-                output = ae.apply(self.train_state.ae_params, self.train_state.rng_key, obs, actions)
+        
+        def compute_uncertainty(
+            state: AEState, observation: chex.Array, actions: chex.Array
+        ) -> Tuple[chex.Array, AEState]:
+            """Computes the uncertainty. Additionally returns new training state if RNG key is changed."""
+            
+            if config.ae_type == "vae":
+                sample_key, new_state_key = jax.random.split(state.rng_key)
+                
+                output = ae.apply(state.ae_params, sample_key, observation, actions)
                 ahat = output.rec_output
                 uncertainty = jnp.mean(jnp.square(ahat - actions), axis=-1)
             else:
-                ahat = ae.apply(self.train_state.ae_params, self.train_state.rng_key, obs, actions)
+                new_state_key = state.rng_key
+                ahat = ae.apply(state.ae_params, state.rng_key, observation, actions)
                 uncertainty = jnp.mean(jnp.square(ahat - actions), axis=-1)
                 
-            return uncertainty
+            new_state = state._replace(rng_key=new_state_key)
+            return uncertainty, new_state
+        
         
         self._update = jax.jit(update)
         self._compute_uncertainty = jax.jit(compute_uncertainty)
-        
-    def save(self, model_path):
-        with open(model_path, 'wb') as f:
-            dill.dump(self.train_state, f, protocol=2)
-        
-    def load(self, model_path):
-        try:
-            with open(model_path, 'rb') as f:
-                train_state = dill.load(f)
-                self.train_state = train_state
-        except FileNotFoundError:
-            print('cannot load AE model')
-            exit()

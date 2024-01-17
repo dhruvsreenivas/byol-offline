@@ -1,8 +1,4 @@
-offline_data/
-pretrained_models/
-trained_policies/
-local_runs/
-logs/
-sub_files/
+wandb/
+scripts/
 *__pycache__*
 .DS_Store

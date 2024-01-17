@@ -1,8 +1,0 @@
-learner: dqn
-
-discount: 0.99
-eps: 0.5
-target_update_freq: 2
-penalize: false
-penalize_q: false
-lam: 0.5

@@ -1,23 +1,16 @@
 import gym
 from gym.wrappers.atari_preprocessing import AtariPreprocessing
 import d4rl
+
+import chex
+import jax
 import jax.numpy as jnp
 import numpy as np
-import torch
+from functools import partial
+from typing import Tuple, Union, Mapping
 
-def set_seed(seed):
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
+"""Basic utilities."""
 
-def to_seq_np(batch):
-    '''Converts batches into sequences.'''
-    def b2s(x):
-        assert isinstance(x, torch.Tensor)
-        return x.transpose(0, 1).numpy()
-
-    return (b2s(x) for x in batch)
 
 def get_random_traj(path):
     traj_fns = list(path.glob('*.npz'))
@@ -27,6 +20,7 @@ def get_random_traj(path):
         episode = np.load(f)
         episode = {k: episode[k] for k in ['image', 'action']}
         return episode
+
 
 def get_test_traj(path, frame_stack=3, seq_len=10):
     episode = get_random_traj(path)
@@ -60,41 +54,11 @@ def get_test_traj(path, frame_stack=3, seq_len=10):
     first_frames = np.stack(first_frames).astype(np.uint8) # should be uint8 here, (T, 64, 64, 3)
     return obs, actions, first_frames
 
-class Until:
-    def __init__(self, until, action_repeat=1):
-        self._until = until
-        self._action_repeat = action_repeat
 
-    def __call__(self, step):
-        if self._until is None:
-            return True
-        until = self._until // self._action_repeat
-        return step < until
+def batch_device_put(batch: Tuple) -> Tuple:
+    map_fn = partial(jax.device_put, device=jax.devices()[0])
+    return (map_fn(elt) for elt in batch)
 
-class Every:
-    def __init__(self, every, action_repeat=1):
-        self._every = every
-        self._action_repeat = action_repeat
-
-    def __call__(self, step):
-        if self._every is None:
-            return False
-        every = self._every // self._action_repeat
-        if step % every == 0:
-            return True
-        return False
-    
-class AverageMeter(object):
-    def __init__(self):
-        self._sum = 0
-        self._count = 0
-
-    def update(self, value, n=1):
-        self._sum += value
-        self._count += n
-
-    def value(self):
-        return self._sum / max(1, self._count)
 
 def flatten_data(transitions):
     '''In case of sequence data, we flatten across sequence length and batch size dimension.'''
@@ -118,57 +82,24 @@ def flatten_data(transitions):
     )
     return transitions
 
-def batched_zeros_like(shape):
-    if type(shape) == int:
-        return jnp.zeros((1, shape))
-    return jnp.zeros((1,) + tuple(shape))
 
-def seq_batched_zeros_like(shape):
-    if type(shape) == int:
-        return jnp.zeros((2, 1, shape))
-    return jnp.zeros((2, 1) + tuple(shape))
+def seq_batched_like(array: chex.Array) -> chex.Array:
+    """Returns a sequence array similar to the one provided that is necessary for batching."""
+    
+    array_expanded = jnp.expand_dims(array, 0)
+    array_expanded = jnp.expand_dims(array_expanded, 0)
+    
+    array_expanded = jnp.tile(array_expanded, (2,) + (1,) * (array_expanded.ndim - 1))
+    return array_expanded
 
-def print_dict(log_dict):
+
+def print_dict(log_dict: Mapping) -> None:
     for k, v in log_dict.items():
         print(f'{k}: {v}')
 
 # ================ GYM UTILS ================
 
-MUJOCO_ENVS = {
-    'halfcheetah': 'HalfCheetah-v2',
-    'ant': 'Ant-v2',
-    'hopper': 'Hopper-v2',
-    'walker2d': 'Walker2d-v2'
-}
-
-ATARI_ENVS = {
-    'pong': 'PongNoFrameskip-v4',
-    'breakout': 'BreakoutNoFrameskip-v4',
-    'beamrider': 'BeamRiderNoFrameskip-v4',
-    'qbert': 'QbertNoFrameskip-v4',
-    'montezuma': 'MontezumaRevengeNoFrameskip-v4'
-}
-
-LEVELS = ['random', 'medium', 'expert', 'medium-replay', 'medium-expert']
-
-def make_gym_env(name, capability):
-    '''Makes training/eval envs for D4RL training/evaluation.'''
-    env_name = name + '-' + capability + '-v2'
-    return gym.make(env_name)
-
-def make_atari_env(name, grayscale=True):
-    assert name in ATARI_ENVS, "Not an Atari env!"
-    name = ATARI_ENVS[name]
-    env = gym.make(name)
-    # now need to apply atari wrapper there
-    env = AtariPreprocessing(env, grayscale_obs=grayscale)
-    return env
+def is_pixel_based(observation_space: gym.Space) -> bool:
+    """Determines whether an environment is pixel-based from its observation spec."""
     
-def get_gym_dataset(name, capability, q_learning=True):
-    '''Gets dataset associated with env and level.'''
-    assert capability in LEVELS, "Not a proper level -- can't load the dataset."
-    env_name = name + '-' + capability + '-v2'
-    env = gym.make(env_name)
-    if q_learning:
-        return d4rl.qlearning_dataset(env)
-    return env.get_dataset()
+    return isinstance(observation_space, gym.spaces.Dict) and "pixels" in list(observation_space.keys())
