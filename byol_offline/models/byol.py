@@ -13,7 +13,7 @@ from byol_offline.base_learner import Learner
 from byol_offline.data import SequenceBatch
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
-from byol_offline.networks.rnn import RSSM
+from byol_offline.networks.rnn import RSSM, RSSMState
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
 from byol_offline.types import ImagineOutput, ObserveOutput, MetricsDict, LossFnOutput
@@ -91,39 +91,44 @@ class ConvWorldModel(hk.Module):
     
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
     
-    def _open_gru_rollout(self, actions: chex.Array, state: chex.Array) -> chex.Array:
+    def _open_gru_rollout(self, actions: chex.Array, state: RSSMState) -> chex.Array:
         """
         Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at initial state `state`.
         
         Only gets the deterministic part of the output, similar to BYOL-Explore.
         """
         
-        def _scan_fn(carry: chex.Array, action: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        def _scan_fn(carry: RSSMState, action: chex.Array) -> Tuple[RSSMState, chex.Array]:
             state = carry
             new_state, _ = self._rssm._onestep_prior(action, state)
-            return new_state, new_state[..., :self._rssm._deter_dim] # new feature, deter state
+            return new_state, new_state[-2] # new state (deter, stoch), deter state
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
     
     
-    def _onestep_imagine(self, action: chex.Array, state: chex.Array) -> ImagineOutput:
+    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> ImagineOutput:
         """Does one step of imagination by rolling out from the prior."""
         
         new_state, _ = self._rssm._onestep_prior(action, state)
-        img_mean = self._decoder(new_state)
-        reward_mean = self._reward_predictor(new_state)
+        new_feature = self._rssm._get_feature(new_state)
+        
+        # run feature through decoders
+        img_mean = self._decoder(new_feature)
+        reward_mean = self._reward_predictor(new_feature)
         
         return img_mean, reward_mean
     
     
-    def _onestep_observe(self, observations: chex.Array, action: chex.Array, state: chex.Array) -> ObserveOutput:
+    def _onestep_observe(self, observation: chex.Array, action: chex.Array, state: RSSMState) -> ObserveOutput:
         """Does one step of observation by rolling out from the posterior."""
         
-        emb = self._encoder(observations)
+        emb = self._encoder(observation)
         new_state, _ = self._rssm._onestep_post(emb, action, state)
-        img_mean = self._decoder(new_state)
-        reward_mean = self._reward_predictor(new_state)
+        new_feature = self._rssm._get_feature(new_state)
+        
+        img_mean = self._decoder(new_feature)
+        reward_mean = self._reward_predictor(new_feature)
         
         return img_mean, reward_mean
     
@@ -166,18 +171,20 @@ class ConvWorldModel(hk.Module):
         # first get embeddings
         B = observations.shape[1]
         embeds = hk.BatchApply(self._encoder)(observations)
-        init_feature = self._rssm._init_feature(B)
+        init_state = self._rssm._init_state(B)
         
         # we first use the RSSM encoder to do one-step before doing open-loop rollouts
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_feature, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
-        latent = self._byol_predictor(first_feature[..., :self._rssm._deter_dim])
-        latent = jnp.expand_dims(latent, 0)
+        first_state, _ = self._rssm._onestep_post(embed, action, init_state) # h_0
         
-        # === collect h_t, latents (BYOL stuff) ===
-        deter_states = self._open_gru_rollout(actions[1:], first_feature)
+        first_deter = first_state[-2]
+        latent = self._byol_predictor(first_deter)
+        latent = jnp.expand_dims(latent, axis=0)
+        
+        # === collect h_t, latents (BYOL stuff) through open loop rollout ===
+        deter_states = self._open_gru_rollout(actions[1:], first_state)
         latents = self._byol_predictor(deter_states)
-        pred_latents = jnp.concatenate([latent, latents]) # [T, B, embed_dim] for both pred_latents and embeds
+        pred_latents = jnp.concatenate([latent, latents], axis=0) # [T, B, embed_dim] for both pred_latents and embeds
         
         # return
         return BYOLOutput(
@@ -221,62 +228,66 @@ class MLPWorldModel(hk.Module):
         
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
     
-    def _open_gru_rollout(self, actions: chex.Array, state: chex.Array) -> chex.Array:
+    def _open_gru_rollout(self, actions: chex.Array, state: RSSMState) -> chex.Array:
         """
         Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state 'state'.
         
         Only gets the deterministic part of the output, similar to BYOL-Explore.
         """
         
-        def _scan_fn(carry, act):
+        def _scan_fn(carry: RSSMState, action: chex.Array) -> Tuple[RSSMState, chex.Array]:
             state = carry
-            new_state, _ = self._rssm._onestep_prior(act, state)
-            return new_state, new_state[..., :self._rssm._deter_dim]
+            new_state, _ = self._rssm._onestep_prior(action, state)
+            return new_state, new_state[-2]
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
     
-    def _onestep_imagine(self, action: chex.Array, state: chex.Array) -> ImagineOutput:
+    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> ImagineOutput:
         """Does one step of imagination by rolling out from the prior."""
         
         new_state, _ = self._rssm._onestep_prior(action, state)
-        state_mean = self._decoder(new_state)
-        reward_mean = self._reward_predictor(new_state)
+        new_feature = self._rssm._get_feature(new_state)
+        
+        state_mean = self._decoder(new_feature)
+        reward_mean = self._reward_predictor(new_feature)
         
         return state_mean, reward_mean
     
-    def _onestep_observe(self, observation: chex.Array, action: chex.Array, state: chex.Array) -> ObserveOutput:
+    def _onestep_observe(self, observation: chex.Array, action: chex.Array, state: RSSMState) -> ObserveOutput:
         """Does one step of observation by rolling out from the posterior."""
         
         emb = self._encoder(observation)
         new_state, _ = self._rssm._onestep_post(emb, action, state)
-        state_mean = self._decoder(new_state)
-        reward_mean = self._reward_predictor(new_state)
+        new_feature = self._rssm._get_feature(new_state)
+        
+        state_mean = self._decoder(new_feature)
+        reward_mean = self._reward_predictor(new_feature)
         
         return state_mean, reward_mean
     
     # ===== forward passes used in training/to define loss function in trainer =====
     
-    def _dreamer_forward(self, obs: chex.Array, actions: chex.Array) -> DreamerOutput:
+    def _dreamer_forward(self, observations: chex.Array, actions: chex.Array) -> DreamerOutput:
         """Forward pass to compute outputs for Dreamer loss."""
         
         # observations should be of shape [T, B, observation_dim], actions of shape [T, B, action_dim]
         
-        embeds = hk.BatchApply(self._encoder)(obs)
-        posts, priors, post_features, prior_features = self._rssm(embeds, actions, None)
+        embeds = hk.BatchApply(self._encoder)(observations)
+        rssm_output = self._rssm(embeds, actions, None)
         
         # state + reward prediction
-        post_state_mean = hk.BatchApply(self._decoder)(post_features) # (T, B, H, W, C)
-        post_reward_mean = hk.BatchApply(self._reward_predictor)(post_features) # (T, B, 1)
-        post_reward_mean = jnp.squeeze(post_reward_mean) # (T, B), so as to be fine with the rewards coming from dataset
+        post_state_mean = hk.BatchApply(self._decoder)(rssm_output.post_features) # [T, B, H, W, C]
+        post_reward_mean = hk.BatchApply(self._reward_predictor)(rssm_output.post_features) # [T, B, 1]
+        post_reward_mean = jnp.squeeze(post_reward_mean) # [T, B], so as to be fine with the rewards coming from dataset
         
-        prior_state_mean = hk.BatchApply(self._decoder)(prior_features)
-        prior_reward_mean = hk.BatchApply(self._reward_predictor)(prior_features)
+        prior_state_mean = hk.BatchApply(self._decoder)(rssm_output.prior_features)
+        prior_reward_mean = hk.BatchApply(self._reward_predictor)(rssm_output.prior_features)
         prior_reward_mean = jnp.squeeze(prior_reward_mean)
         
         return DreamerOutput(
-            post_observation_mean=post_state_mean, post_reward_mean=post_reward_mean, posts=posts,
-            prior_observation_mean=prior_state_mean, prior_reward_mean=prior_reward_mean, priors=priors
+            post_observation_mean=post_state_mean, post_reward_mean=post_reward_mean, posts=rssm_output.posts,
+            prior_observation_mean=prior_state_mean, prior_reward_mean=prior_reward_mean, priors=rssm_output.priors
         )
     
     def _byol_forward(self, observations: chex.Array, actions: chex.Array) -> BYOLOutput:
@@ -287,15 +298,18 @@ class MLPWorldModel(hk.Module):
         # first get embeddings
         B = observations.shape[1]
         embeds = hk.BatchApply(self._encoder)(observations)
-        init_feature = self._rssm._init_feature(B)
+        init_state = self._rssm._init_state(B)
+        init_feature = self._rssm._get_feature(init_state)
         
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_feature, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
-        latent = self._byol_predictor(first_feature[..., :self._rssm._deter_dim])
+        first_state, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
+        
+        first_deter = first_state[-2]
+        latent = self._byol_predictor(first_deter)
         latent = jnp.expand_dims(latent, 0)
         
         # === collect h_t, latents (BYOL stuff) ===
-        deter_states = self._open_gru_rollout(actions[1:], first_feature)
+        deter_states = self._open_gru_rollout(actions[1:], first_state)
         latents = hk.BatchApply(self._byol_predictor)(deter_states)
         pred_latents = jnp.concatenate([latent, latents]) # (T, B, embed_dim) for both pred_latents and embeds
         
@@ -404,18 +418,23 @@ class BYOLLearner(Learner):
         
         # ----- get forward pass methods -----
         
-        def _get_latent_dist(stats: chex.Array) -> Union[distrax.Distribution, distrax.DistributionLike]:
+        def _get_latent_dist(
+            stats: chex.Array, stop_gradient: bool = False,
+        ) -> Union[distrax.Distribution, distrax.DistributionLike]:
             """Gets the distribution associated with the latent statistics."""
+            
+            stats = jnp.where(stop_gradient, jax.lax.stop_gradient(stats), stats)
             
             if discrete:
                 stats = stats.reshape(stats.shape[:-1] + (config.stoch_dim, config.stoch_discrete_dim))
                 distribution = distrax.straight_through_wrapper(distrax.OneHotCategorical)(logits=stats)
+                distribution = distrax.Independent(distribution, 1)
             else:
                 mean, std = jnp.split(stats, 2, -1)
                 std = jax.nn.softplus(std) + 0.1
-                distribution = distrax.Normal(mean, std)
+                distribution = distrax.MultivariateNormalDiag(mean, std)
             
-            return distrax.Independent(distribution, 1)
+            return distribution
         
         
         def _get_img_dist(mean: chex.Array) -> distrax.Distribution:
@@ -501,6 +520,7 @@ class BYOLLearner(Learner):
             def ws_body_fn(ws, curr_state):
                 curr_loss, curr_loss_window, key = curr_state
                 loss_key, moveon_key = jax.random.split(key)
+                
                 loss, loss_window = byol_loss_fn_window_size(wm_params, target_params, batch, loss_key, ws)
                 return curr_loss + loss, curr_loss_window + loss_window, moveon_key
             
@@ -533,9 +553,25 @@ class BYOLLearner(Learner):
             
             post_dist = _get_latent_dist(post_stats)
             prior_dist = _get_latent_dist(prior_stats)
-            kl = post_dist.kl_divergence(prior_dist).mean()
             
-            metrics = {"rec": rec_loss, "kl": kl}
+            if config.kl_balance == 0.5:
+                kl = post_dist.kl_divergence(prior_dist)
+                kl_loss = jnp.maximum(kl, config.kl_free_value).mean()
+            else:
+                post_dist_sg = _get_latent_dist(post_stats, stop_gradient=True)
+                prior_dist_sg = _get_latent_dist(prior_stats, stop_gradient=True)
+                
+                # these should have the same value, but different gradient propagation
+                left_kl = post_dist.kl_divergence(prior_dist_sg)
+                right_kl = post_dist_sg.kl_divergence(prior_dist)
+                
+                left_loss = jnp.maximum(left_kl, config.kl_free_value).mean()
+                right_loss = jnp.maximum(right_kl, config.kl_free_value).mean()
+                kl_loss = (1.0 - config.kl_balance) * left_loss + config.kl_balance * right_loss
+                
+                kl = (left_kl + right_kl) / 2
+            
+            metrics = {"rec": rec_loss, "kl_loss": kl_loss, "kl": kl}
             return rec_loss + vae_beta * kl, metrics
         
         

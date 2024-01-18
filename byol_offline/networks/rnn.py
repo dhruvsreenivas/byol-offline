@@ -13,7 +13,7 @@ RSSMState = Union[
     Tuple[chex.Array, chex.Array, chex.Array, chex.Array],
 ]
 
-RSSMStatistics = Union[chex.Array, Tuple[chex.Array, chex.Array]]
+RSSMStatistics = Union[Tuple[chex.Array], Tuple[chex.Array, chex.Array]]
 RSSMFnOutput = Tuple[RSSMState, chex.Array]
 PosteriorInput = Tuple[chex.Array, chex.Array]
 
@@ -30,6 +30,19 @@ glorot_w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "uniform")
 ortho_init = hk.initializers.Orthogonal()
 
 
+def arrayify(stats: RSSMStatistics) -> chex.Array:
+    """Array-ifies a set of statistics (either [logits,] or [mean, std]) for easy scanning.
+    
+    Logits would be of shape [B, stoch_dim, stoch_discrete_dim].
+    Mean and standard deviation would be of shape [B, stoch_dim].
+    """
+    
+    if len(stats) == 1:
+        return stats[0]
+    else:
+        return jnp.concatenate(stats, axis=-1)
+
+
 class LayerNormGRU(hk.RNNCore):
     """GRU with additional layer norm, as in DreamerV2."""
     
@@ -43,6 +56,7 @@ class LayerNormGRU(hk.RNNCore):
         if norm:
             self._norm = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
             
+    
     def initial_state(self, batch_size: Optional[int]) -> chex.Array:
         state = jnp.zeros(self._hidden_size)
         if batch_size is not None:
@@ -50,6 +64,7 @@ class LayerNormGRU(hk.RNNCore):
             state = jnp.expand_dims(state, 0)
             state = jnp.tile(state, reps=(batch_size, 1))
         return state
+    
     
     def __call__(self, x: chex.Array, state: chex.Array) -> RecurrentOutput:
         parts = self._layer(jnp.concatenate([x, state], axis=-1))
@@ -140,7 +155,7 @@ class RSSM(hk.Module):
             # need to flatten it in discrete case
             stoch = jnp.reshape(stoch, stoch.shape[:-2] + (-1,))
         
-        return jnp.concatenate([deter, stoch], axis=-1)
+        return jnp.concatenate([stoch, deter], axis=-1)
 
     
     def _get_dist_and_stats(self, stats: chex.Array) -> Tuple[distrax.Distribution, RSSMStatistics]:
@@ -159,19 +174,19 @@ class RSSM(hk.Module):
             distribution = distrax.MultivariateNormalDiag(mean, std)
             
             stats = (mean, std)
-        
+            
         return distribution, stats
     
     
     def _onestep_prior(self, action: chex.Array, state: RSSMState) -> RSSMFnOutput:
-        """Does one step of the prior distribution."""
+        """Does one sampling step from the prior distribution."""
         
         deter, stoch = state[-2:]
         
         sta = jnp.concatenate([stoch, action], axis=-1)
         sta = self._pre_gru(sta)
         
-        x, new_deter = self._gru(x, deter)
+        x, new_deter = self._gru(sta, deter)
         prior_stats = self._prior_mlp(x)
 
         # now that we have the prior stats, we can grab the distribution and new state
@@ -179,6 +194,10 @@ class RSSM(hk.Module):
         new_stoch = prior_distribution.sample(seed=hk.next_rng_key())
         
         new_state = prior_stats + (new_deter, new_stoch)
+        
+        # need to array-ify the stats somehow for good scanning
+        prior_stats = arrayify(prior_stats)
+        
         return new_state, prior_stats
     
     
@@ -195,11 +214,15 @@ class RSSM(hk.Module):
         new_stoch = posterior_distribution.sample(seed=hk.next_rng_key())
         
         new_state = posterior_stats + (deter, new_stoch)
+        
+        # array-ify posterior stats
+        posterior_stats = arrayify(posterior_stats)
+        
         return new_state, posterior_stats
     
     
     def __call__(
-        self, embeds: chex.Array, actions: chex.Array, state: Optional[chex.Array] = None
+        self, embeds: chex.Array, actions: chex.Array, state: Optional[RSSMState] = None
     ) -> RSSMOutput:
         """Calls the RSSM."""
         
@@ -227,8 +250,8 @@ class RSSM(hk.Module):
             state = carry
             embed, action = embed_action
             
-            new_state, post = self._onestep_post(embed, action, state)
-            return new_state, post
+            new_state, posterior = self._onestep_post(embed, action, state)
+            return new_state, posterior
         
         
         def _post_feature_scan_fn(carry: RSSMState, embed_action: PosteriorInput) -> RSSMFnOutput:
@@ -243,9 +266,9 @@ class RSSM(hk.Module):
         
         init = state
         _, priors = hk.scan(_prior_scan_fn, init, actions)
-        _, posts = hk.scan(_post_scan_fn, init, (embeds, actions))
-        
         _, prior_features = hk.scan(_prior_feature_scan_fn, init, actions)
+        
+        _, posts = hk.scan(_post_scan_fn, init, (embeds, actions))
         _, post_features = hk.scan(_post_feature_scan_fn, init, (embeds, actions))
         
         return RSSMOutput(

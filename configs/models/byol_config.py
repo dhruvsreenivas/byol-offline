@@ -55,4 +55,7 @@ def get_config():
     config.vae_beta = 1.0
     config.beta = 1.0
     
+    config.kl_balance = 0.8
+    config.kl_free_value = 1.0
+    
     return config
