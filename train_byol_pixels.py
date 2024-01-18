@@ -12,6 +12,8 @@ from absl import app, flags
 from ml_collections import config_flags
 import wandb
 from typing import Tuple
+from PIL import Image
+import numpy as np
 
 from byol_offline.models import BYOLLearner
 from byol_offline.data.vd4rl_dataset import VD4RLDataset
@@ -34,6 +36,7 @@ flags.DEFINE_boolean(
 
 flags.DEFINE_integer("seed", 69, "Random seed.")
 flags.DEFINE_integer("log_interval", 50, "Logging interval.")
+flags.DEFINE_integer("eval_interval", None, "How often to evaluate. Defaults to not evaluating.")
 flags.DEFINE_integer("batch_size", 256, "Batch size.")
 flags.DEFINE_integer("sequence_length", 5, "Sequence length.")
 flags.DEFINE_integer("max_steps", 3000, "Number of training steps.")
@@ -44,7 +47,7 @@ flags.DEFINE_integer(
     "action_repeat", None, "Action repeat. If None, uses 2 or PlaNet defaults."
 )
 
-flags.DEFINE_boolean("tqdm", True, "Use tqdm progress bar.")
+flags.DEFINE_boolean("tqdm", True, "Whether to use tqdm progress bar.")
 flags.DEFINE_boolean("wandb", True, "Whether to use WandB logging.")
 flags.DEFINE_integer("save_interval", 1000, "How often to save.")
 flags.DEFINE_boolean(
@@ -145,6 +148,33 @@ def main(_):
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
                 wandb.log({f"train/{k}": v}, step=i)
+                
+        # evaluate every so often
+        if FLAGS.eval_interval is not None and i % FLAGS.eval_interval == 0:
+            learner._state, posterior_images, prior_images = learner._eval(learner._state, batch)
+            actual_images = batch.observations[:, 0, ...][:, :, :, :3]
+            
+            actual_images = [
+                Image.fromarray(np.asarray(image), mode="RGB")
+                for image in actual_images
+            ]
+            posterior_images = [
+                Image.fromarray(np.asarray(image), mode="RGB")
+                for image in posterior_images
+            ]
+            prior_images = [
+                Image.fromarray(np.asarray(image), mode="RGB")
+                for image in prior_images
+            ]
+            
+            for actual, posterior, prior in zip(actual_images, posterior_images, prior_images):
+                wandb.log(
+                    {
+                        "actual": wandb.Image(actual, "Actual"),
+                        "posterior": wandb.Image(posterior, "Posterior"),
+                        "prior": wandb.Image(prior, "Prior")
+                    }
+                )
                 
         # optionally save
         if FLAGS.checkpoint_model and i % FLAGS.save_interval == 0:

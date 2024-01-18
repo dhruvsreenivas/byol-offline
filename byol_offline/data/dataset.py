@@ -1,6 +1,6 @@
-import collections
-import numpy as np
+import chex
 import jax
+import jax.numpy as jnp
 import gym
 from gym.utils import seeding
 from typing import (
@@ -14,6 +14,8 @@ from typing import (
     Iterable
 )
 import random
+import collections
+import numpy as np
 
 from byol_offline.types import DatasetDict
 
@@ -40,6 +42,18 @@ class SequenceBatch(NamedTuple):
     next_observations: np.ndarray
     dones: np.ndarray
     masks: np.ndarray
+    
+    
+def _preprocess(batch: Union[Batch, SequenceBatch]) -> Union[Batch, SequenceBatch]:
+    """Preprocesses the data batch."""
+    
+    def _process_image(x: chex.Array) -> chex.Array:
+        return x.astype(jnp.float32) / 255.0 - 0.5
+    
+    return jax.tree_util.tree_map(
+        lambda x: _process_image(x) if x.dtype == jnp.uint8 else x,
+        batch
+    )
     
 
 def _check_lengths(dataset_dict: DatasetDict, dataset_len: Optional[int] = None) -> int:

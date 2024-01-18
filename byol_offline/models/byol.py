@@ -10,7 +10,8 @@ from ml_collections import ConfigDict
 from typing import Tuple, NamedTuple, Union, Mapping
 
 from byol_offline.base_learner import Learner
-from byol_offline.data import SequenceBatch
+from byol_offline.data import SequenceBatch, _preprocess
+from byol_offline.distributions import OneHotDistribution
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
 from byol_offline.networks.rnn import RSSM, RSSMState
@@ -18,7 +19,7 @@ from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
 from byol_offline.types import ImagineOutput, ObserveOutput, MetricsDict, LossFnOutput
 
-from utils import seq_batched_like, is_pixel_based
+from utils import seq_batched_like, is_pixel_based, broadcast_to_local_devices
 
 """BYOL-Explore world model definition + trainer."""
 
@@ -138,6 +139,7 @@ class ConvWorldModel(hk.Module):
         """Full forward pass to get Dreamer outputs."""
         
         # observations should be of shape [T, B, H, W, C], actions of shape [T, B, action_dim]
+        observations = observations.astype(jnp.float32)
         
         # first get embeddings of observations
         embeds = hk.BatchApply(self._encoder)(observations)
@@ -167,6 +169,7 @@ class ConvWorldModel(hk.Module):
         """Full output for BYOL loss computation."""
         
         # as above, observations should be of shape [T, B, H, W, C], actions of shape [T, B, action_dim]
+        observations = observations.astype(jnp.float32)
         
         # first get embeddings
         B = observations.shape[1]
@@ -230,7 +233,7 @@ class MLPWorldModel(hk.Module):
     
     def _open_gru_rollout(self, actions: chex.Array, state: RSSMState) -> chex.Array:
         """
-        Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state 'state'.
+        Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state `state`.
         
         Only gets the deterministic part of the output, similar to BYOL-Explore.
         """
@@ -356,7 +359,7 @@ def make_byol_network(config: ConfigDict, observation_space: gym.Space) -> hk.Mu
 
 
 class BYOLLearner(Learner):
-    """BYOL world model learner."""
+    """BYOL-Explore world model learner."""
     
     def __init__(
         self,
@@ -385,9 +388,18 @@ class BYOLLearner(Learner):
         def make_initial_state(key: chex.PRNGKey) -> BYOLState:
             init_key, state_key = jax.random.split(key)
             
-            wm_params = target_params = wm.init(
+            wm_params = wm.init(
                 init_key, seq_batched_like(observations), seq_batched_like(actions)
             )
+            if config.initialize_target_with_online_params:
+                target_params = wm_params
+            else:
+                target_init_key, _ = jax.random.split(init_key)
+                target_params = wm.init(
+                    target_init_key, seq_batched_like(observations),
+                    seq_batched_like(actions)
+                )
+            
             wm_opt_state = optimizer.init(wm_params)
             
             state = BYOLState(
@@ -401,6 +413,7 @@ class BYOLLearner(Learner):
         # similar to make initial state for BYOL: https://github.com/deepmind/deepmind-research/blob/master/byol/byol_experiment.py#L424
         if config.pmap:
             init_wm_fn = jax.pmap(make_initial_state, axis_name="devices")
+            base_key = broadcast_to_local_devices(base_key)
         else:
             init_wm_fn = make_initial_state
         
@@ -421,13 +434,19 @@ class BYOLLearner(Learner):
         def _get_latent_dist(
             stats: chex.Array, stop_gradient: bool = False,
         ) -> Union[distrax.Distribution, distrax.DistributionLike]:
-            """Gets the distribution associated with the latent statistics."""
+            """Gets the distribution associated with the latent statistics.
             
+            Sequential information should be here (e.g. we have time dim added.)
+            """
+            
+            # first flatten stats -- this is important!
+            stats = jnp.reshape(stats, (-1,) + stats.shape[2:]) # [T * B, stoch_dim, stoch_discrete_dim]
+            
+            # detach if necessary
             stats = jnp.where(stop_gradient, jax.lax.stop_gradient(stats), stats)
             
             if discrete:
-                stats = stats.reshape(stats.shape[:-1] + (config.stoch_dim, config.stoch_discrete_dim))
-                distribution = distrax.straight_through_wrapper(distrax.OneHotCategorical)(logits=stats)
+                distribution = OneHotDistribution(logits=stats)
                 distribution = distrax.Independent(distribution, 1)
             else:
                 mean, std = jnp.split(stats, 2, -1)
@@ -532,8 +551,7 @@ class BYOLLearner(Learner):
         def dreamer_loss_fn(
             wm_params: hk.Params, batch: SequenceBatch, key: chex.PRNGKey
         ) -> LossFnOutput:
-            """
-            Only Dreamer loss.
+            """Only Dreamer loss.
             
             No need for masking -- we can model entire sequence without overlap.
             """
@@ -547,32 +565,48 @@ class BYOLLearner(Learner):
             post_reward_mean = dreamer_out.post_reward_mean
             post_stats, prior_stats = dreamer_out.posts, dreamer_out.priors
             
-            img_dist = _get_img_dist(post_observation_mean)
-            reward_dist = _get_reward_dist(post_reward_mean)
-            rec_loss = -img_dist.log_prob(obs_seq).mean() - reward_dist.log_prob(reward_seq).mean()
+            # get reconstruction loss
+            observation_distribution = _get_img_dist(post_observation_mean)
+            reward_distribution = _get_reward_dist(post_reward_mean)
             
+            observation_log_likelihood = observation_distribution.log_prob(obs_seq) * batch.masks
+            reward_log_likelihood = reward_distribution.log_prob(reward_seq) * batch.masks
+            
+            reconstruction_loss = -observation_log_likelihood.mean() - reward_log_likelihood.mean()
+            
+            # get KL loss
             post_dist = _get_latent_dist(post_stats)
             prior_dist = _get_latent_dist(prior_stats)
             
             if config.kl_balance == 0.5:
                 kl = post_dist.kl_divergence(prior_dist)
                 kl_loss = jnp.maximum(kl, config.kl_free_value).mean()
+                
+                # make KL a scalar for logging
+                kl = kl.mean()
             else:
                 post_dist_sg = _get_latent_dist(post_stats, stop_gradient=True)
                 prior_dist_sg = _get_latent_dist(prior_stats, stop_gradient=True)
                 
                 # these should have the same value, but different gradient propagation
-                left_kl = post_dist.kl_divergence(prior_dist_sg)
-                right_kl = post_dist_sg.kl_divergence(prior_dist)
+                left_kl = post_dist.kl_divergence(prior_dist_sg) # [T * B]
+                right_kl = post_dist_sg.kl_divergence(prior_dist) # [T * B]
                 
                 left_loss = jnp.maximum(left_kl, config.kl_free_value).mean()
                 right_loss = jnp.maximum(right_kl, config.kl_free_value).mean()
+                
                 kl_loss = (1.0 - config.kl_balance) * left_loss + config.kl_balance * right_loss
                 
-                kl = (left_kl + right_kl) / 2
+                kl = ((left_kl + right_kl) / 2).mean()
             
-            metrics = {"rec": rec_loss, "kl_loss": kl_loss, "kl": kl}
-            return rec_loss + vae_beta * kl, metrics
+            total_loss = reconstruction_loss + vae_beta * kl_loss
+            metrics = {
+                "total_loss": total_loss,
+                "reconstruction_loss": reconstruction_loss,
+                "kl_loss": kl_loss,
+                "kl": kl
+            }
+            return total_loss, metrics
         
         
         def total_loss_fn(
@@ -584,6 +618,8 @@ class BYOLLearner(Learner):
             byol_key, dreamer_key = jax.random.split(key)
             byol_loss, _ = byol_loss_fn(wm_params, target_params, batch, byol_key)
             dreamer_loss, metrics = dreamer_loss_fn(wm_params, batch, dreamer_key)
+            
+            # add BYOL loss to the 
             metrics["byol"] = byol_loss
             
             total_loss = dreamer_loss + beta * byol_loss
@@ -598,6 +634,9 @@ class BYOLLearner(Learner):
             
             del step
             
+            # first we preprocess the batch
+            batch = _preprocess(batch)
+            
             update_key, state_key = jax.random.split(state.rng_key)
             grad_fn = jax.grad(total_loss_fn, has_aux=True)
             grads, metrics = grad_fn(state.params, state.target_params, batch, update_key)
@@ -605,6 +644,7 @@ class BYOLLearner(Learner):
             if config.pmap:
                 # all reduce to one device
                 grads = jax.lax.pmean(grads, axis_name="devices")
+                metrics = jax.lax.pmean(metrics, axis_name="devices")
             
             update, new_opt_state = optimizer.update(grads, state.opt_state)
             new_params = optax.apply_updates(state.params, update)
@@ -625,10 +665,10 @@ class BYOLLearner(Learner):
             """
             Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
             
-            :param obs_seq: Sequence of observations, of shape (seq_len, B, obs_dim)
-            :param action_seq: Sequence of actions, of shape (seq_len, B, action_dim)
+            :param obs_seq: Sequence of observations, of shape [T, B, obs_dim]
+            :param action_seq: Sequence of actions, of shape [T, B, action_dim]
             
-            :return uncertainties: Model uncertainties, of shape (seq_len, B).
+            :return uncertainties: Model uncertainties, of shape [T, B].
             """
             
             # losses are of shape [T, B], result of only BYOL loss accumulation
@@ -640,20 +680,37 @@ class BYOLLearner(Learner):
         
         # ====== eval methods ======
         
-        def eval(
-            state: BYOLState, obs_seq: chex.Array, action_seq: chex.Array, from_posterior: bool = True
-        ) -> Tuple[BYOLState, chex.Array]:
-            """Evaluate from prior or posterior on a test trajectory from the offline dataset."""
+        def eval(state: BYOLState, batch: SequenceBatch) -> Tuple[BYOLState, chex.Array, chex.Array]:
+            """Evaluate from prior and posterior on a batch in the offline dataset."""
+            
+            # first we preprocess the batch
+            batch = _preprocess(batch)
+            
+            # only get the first batch, unflatten so we can actually pass it through
+            obs_seq, action_seq = batch.observations[:, 0, ...], batch.actions[:, 0, ...]
+            obs_seq, action_seq = jnp.expand_dims(obs_seq, 1), jnp.expand_dims(action_seq, 1)
             
             eval_key, new_state_key = jax.random.split(state.rng_key)
-            post_img_means, _, prior_img_means, _, _, _ = dreamer_forward(state.params, eval_key, obs_seq, action_seq)
+            dreamer_out = dreamer_forward(state.params, eval_key, obs_seq, action_seq)
             
-            img_means = jnp.where(from_posterior, post_img_means, prior_img_means)
-            img_means = (img_means + 0.5) * 255.0
-            img_means = jnp.squeeze(img_means[:, :, :, :, :3]) # just the first image
+            post_img_means = dreamer_out.post_observation_mean
+            prior_img_means = dreamer_out.prior_observation_mean
+            
+            # now that we have these, we should squeeze them
+            post_img_means = post_img_means.squeeze()
+            prior_img_means = prior_img_means.squeeze()
+            
+            def get_image_to_log(img_means: chex.Array) -> chex.Array:
+                img_means = (img_means + 0.5) * 255.0
+                img_means = img_means.astype(jnp.uint8)
+                img_means = img_means[:, :, :, :3] # just the first image
+                return img_means
+            
+            post_img_means = get_image_to_log(post_img_means)
+            prior_img_means = get_image_to_log(prior_img_means)
             
             new_state = state._replace(rng_key=new_state_key)
-            return new_state, jax.lax.stop_gradient(img_means)
+            return new_state, jax.lax.stop_gradient(post_img_means), jax.lax.stop_gradient(prior_img_means)
         
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # only pmapping the update here because we don't need to do it for eval and uncertainty computation (as they are both evaluation protocols mainly)

@@ -47,10 +47,10 @@ def make_ddpg_networks(
     def encoder_fn(observation: chex.Array) -> chex.Array:
         if is_pixel_based(observation_space):
             pixel_encoder_config = encoder_config.pixel
-            if pixel_encoder_config.type == "drqv2":
-                return DrQv2Encoder()(observation)
-            else:
+            if pixel_encoder_config.dreamer:
                 return DreamerEncoder(pixel_encoder_config.depth)(observation)
+            else:
+                return DrQv2Encoder()(observation)
         else:
             state_encoder_config = encoder_config.state
             encoder = hk.nets.MLP(

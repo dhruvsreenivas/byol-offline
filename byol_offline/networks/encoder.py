@@ -52,11 +52,9 @@ class DrQv2Encoder(hk.Module):
             hk.Flatten()
         ])
         
-    def __call__(self, obs: chex.Array) -> chex.Array:
-        obs = obs / 255.0 - 0.5
-        
-        h = self._convnet(obs)
-        return h
+    def __call__(self, observation: chex.Array) -> chex.Array:
+        out = self._convnet(observation)
+        return out
         
 
 class DreamerEncoder(hk.Module):
@@ -78,10 +76,8 @@ class DreamerEncoder(hk.Module):
             hk.Flatten()
         ])
         
-    def __call__(self, obs: chex.Array) -> chex.Array:
-        obs = obs / 255.0 - 0.5
-        
-        out = self._convnet(obs)
+    def __call__(self, observation: chex.Array) -> chex.Array:
+        out = self._convnet(observation)
         return out
 
 # ====== Atari stuff ======

@@ -14,7 +14,7 @@ from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
 from byol_offline.types import LossFnOutput, MetricsDict
 
-from utils import is_pixel_based
+from utils import is_pixel_based, broadcast_to_local_devices
 
 """RND definition + trainer."""
 
@@ -159,6 +159,7 @@ class RNDLearner(Learner):
         # if parallelizing, pmap the initial function to make the state to parallelize it
         if config.pmap:
             init_fn = jax.pmap(make_initial_state, axis_name="devices")
+            base_key = broadcast_to_local_devices(base_key)
         else:
             init_fn = make_initial_state
         

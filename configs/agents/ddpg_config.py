@@ -13,7 +13,7 @@ def get_config():
     config.encoder = ConfigDict()
     
     config.encoder.pixel = ConfigDict()
-    config.encoder.pixel.type = "drqv2"
+    config.encoder.pixel.dreamer = False
     config.encoder.pixel.depth = 32
     
     config.encoder.state = ConfigDict()

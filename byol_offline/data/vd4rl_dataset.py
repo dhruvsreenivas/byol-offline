@@ -146,14 +146,3 @@ class VD4RLDataset(MemoryEfficientReplayBuffer):
                     while len(stacked_frames) < framestack:
                         stacked_frames.append(episode["image"][i])
                         next_stacked_frames.append(episode["image"][i])
-
-
-if __name__ == "__main__":
-    env = gym.make("cheetah-run-v0")
-    env, pixel_keys = default_wrap(env)
-    
-    dataset = VD4RLDataset(env, "expert", pixel_keys=pixel_keys)
-    sequence_batch = dataset.sample_sequences(10, 5)
-    
-    for item in sequence_batch:
-        print(item.shape)

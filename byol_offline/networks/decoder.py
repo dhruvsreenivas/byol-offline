@@ -53,9 +53,8 @@ class DreamerDecoder(hk.Module):
         ])
         
     def __call__(self, x: chex.Array) -> chex.Array:
-        out_dim = 32 * self._depth
         
-        x = hk.Linear(out_dim, w_init=self._initializer)(x)
-        x = jnp.reshape(x, (x.shape[0], 1, 1, out_dim))
+        x = hk.Linear(32 * self._depth, w_init=self._initializer)(x)
+        x = jnp.reshape(x, (-1, 1, 1, 32 * self._depth))
         mean = self._convnet(x)
         return mean

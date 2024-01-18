@@ -7,6 +7,7 @@ from ml_collections import ConfigDict
 from typing import NamedTuple, Optional, Tuple, Union
 
 from byol_offline.types import RecurrentOutput
+from byol_offline.distributions import OneHotDistribution
 
 RSSMState = Union[
     Tuple[chex.Array, chex.Array, chex.Array],
@@ -107,7 +108,7 @@ class RSSM(hk.Module):
         else:
             self._gru = hk.GRU(config.gru_hidden_size, w_i_init=glorot_w_init, w_h_init=ortho_init)
         
-        # DreamerV2 online uses only 1 prior, and since we're not ensembling here we don't mind doing the same thing
+        # DreamerV2 online uses only 1 prior, and since we're not ensembling here we do the same thing
         dist_dim = config.stoch_dim * config.stoch_discrete_dim if self._discrete else 2 * config.stoch_dim
         self._prior_mlp = hk.Sequential([
             hk.Linear(config.hidden_dim, w_init=glorot_w_init),
@@ -124,7 +125,7 @@ class RSSM(hk.Module):
     def _init_state(self, batch_size: Optional[int]) -> RSSMState:
         """Returns the initial state of the RSSM as a tuple. Dicts aren't useful for this.
         
-        In the caes of categorical distributions, we return [logits, deter, stoch].
+        In the case of categorical distributions, we return [logits, deter, stoch].
         In the case of Gaussian distribution, we return [mean, std, deter, stoch].
         """
         
@@ -132,27 +133,27 @@ class RSSM(hk.Module):
         
         if self._discrete:
             return (
-                jnp.zeros((bs, self._stoch_dim, self._stoch_discrete_dim)),
-                jnp.zeros((bs, self._deter_dim)),
-                jnp.zeros((bs, self._stoch_dim, self._stoch_discrete_dim))
+                jnp.zeros((bs, self._stoch_dim, self._stoch_discrete_dim), dtype=jnp.float32),
+                jnp.zeros((bs, self._deter_dim), dtype=jnp.float32),
+                jnp.zeros((bs, self._stoch_dim, self._stoch_discrete_dim), dtype=jnp.float32)
             )
         else:
             return (
-                jnp.zeros((bs, self._stoch_dim)),
-                jnp.ones((bs, self._stoch_dim)),
-                jnp.zeros((bs, self._deter_dim)),
-                jnp.zeros((bs, self._stoch_dim))
+                jnp.zeros((bs, self._stoch_dim), dtype=jnp.float32),
+                jnp.ones((bs, self._stoch_dim), dtype=jnp.float32),
+                jnp.zeros((bs, self._deter_dim), dtype=jnp.float32),
+                jnp.zeros((bs, self._stoch_dim), dtype=jnp.float32)
             )
     
     
     def _get_feature(self, state: RSSMState) -> chex.Array:
-        """Gets the hidden latent state (combination of deterministic + stochastic parts)."""
+        """Gets the hidden latent state (concatenation of deterministic + stochastic parts)."""
         
         deter = state[-2]
         stoch = state[-1]
         
         if self._discrete:
-            # need to flatten it in discrete case
+            # need to flatten stochastic in discrete case
             stoch = jnp.reshape(stoch, stoch.shape[:-2] + (-1,))
         
         return jnp.concatenate([stoch, deter], axis=-1)
@@ -162,9 +163,10 @@ class RSSM(hk.Module):
         """Gets the latent distribution and statistics (e.g. logits that define categorical, mean/std of Gaussian)."""
         
         if self._discrete:
-            logits = jnp.reshape(stats, stats.shape[:-1] + (self._stoch_dim, self._stoch_discrete_dim))
-            dist_class = distrax.straight_through_wrapper(distrax.OneHotCategorical)
-            distribution = dist_class(logits=logits)
+            logits = jnp.reshape(
+                stats, stats.shape[:-1] + (self._stoch_dim, self._stoch_discrete_dim)
+            )
+            distribution = OneHotDistribution(logits=logits)
             distribution = distrax.Independent(distribution, 1)
             
             stats = (logits,)
@@ -182,6 +184,13 @@ class RSSM(hk.Module):
         """Does one sampling step from the prior distribution."""
         
         deter, stoch = state[-2:]
+        stoch_shape = stoch.shape
+        
+        # first reshape the stoch to the right shape
+        if self._discrete:
+            stoch = jnp.reshape(
+                stoch, stoch.shape[:-2] + (self._stoch_dim * self._stoch_discrete_dim,)
+            )
         
         sta = jnp.concatenate([stoch, action], axis=-1)
         sta = self._pre_gru(sta)
@@ -191,8 +200,10 @@ class RSSM(hk.Module):
 
         # now that we have the prior stats, we can grab the distribution and new state
         prior_distribution, prior_stats = self._get_dist_and_stats(prior_stats)
-        new_stoch = prior_distribution.sample(seed=hk.next_rng_key())
+        new_stoch = prior_distribution.sample(seed=hk.next_rng_key()) # [B, stoch_dim, stoch_discrete_dim] in discrete case, [B, stoch_dim] in non-discrete one
+        assert new_stoch.shape == stoch_shape, f"Not the same, got {stoch_shape}, {new_stoch.shape}"
         
+        # create new state with the prior stats tuple
         new_state = prior_stats + (new_deter, new_stoch)
         
         # need to array-ify the stats somehow for good scanning
@@ -211,12 +222,12 @@ class RSSM(hk.Module):
         posterior_stats = self._post_mlp(de)
         
         posterior_distribution, posterior_stats = self._get_dist_and_stats(posterior_stats)
-        new_stoch = posterior_distribution.sample(seed=hk.next_rng_key())
+        new_stoch = posterior_distribution.sample(seed=hk.next_rng_key()) # [B, stoch_dim, stoch_discrete_dim]
         
         new_state = posterior_stats + (deter, new_stoch)
         
         # array-ify posterior stats
-        posterior_stats = arrayify(posterior_stats)
+        posterior_stats = arrayify(posterior_stats) # [B, stoch_dim, stoch_discrete_dim]
         
         return new_state, posterior_stats
     
