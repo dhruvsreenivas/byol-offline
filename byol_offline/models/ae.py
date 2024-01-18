@@ -20,14 +20,14 @@ class AEState(NamedTuple):
     
     ae_params: hk.Params
     ae_opt_state: optax.OptState
-    rng_key: jax.random.PRNGKey
+    rng_key: chex.PRNGKey
     
 
 class DeterVAEOutput(NamedTuple):
     """VAE output."""
     
     latent_dist: distrax.Distribution
-    rec_output: jnp.ndarray
+    rec_output: chex.Array
 
 
 class CondAE(hk.Module):

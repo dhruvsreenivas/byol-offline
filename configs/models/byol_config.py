@@ -19,10 +19,10 @@ def get_config():
     config.pixel.rssm = ConfigDict()
     
     config.pixel.rssm.dreamer = config.pixel.dreamer
-    config.pixel.rssm.gru_hidden_size = 1024
+    config.pixel.rssm.gru_hidden_size = 256
     config.pixel.rssm.use_layer_norm = True
-    config.pixel.rssm.stoch_dim = 32
-    config.pixel.rssm.stoch_discrete_dim = 32
+    config.pixel.rssm.stoch_dim = 64
+    config.pixel.rssm.stoch_discrete_dim = 1
     config.pixel.rssm.hidden_dim = 1024
     
     # reward MLP args
@@ -51,7 +51,7 @@ def get_config():
     # --- more general training parameters ---
     
     config.initialize_target_with_online_params = True
-    config.learning_rate = 3e-4
+    config.learning_rate = 6e-4
     config.ema = 0.95
     config.vae_beta = 1.0
     config.beta = 1.0
