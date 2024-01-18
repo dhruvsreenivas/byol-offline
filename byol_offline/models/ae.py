@@ -108,7 +108,7 @@ class VAE(hk.Module):
         return DeterVAEOutput(latent_dist=dist, rec_output=ahat)
     
     
-def make_ae_network(config: ConfigDict) -> hk.Transformed:
+def make_ae_network(config: ConfigDict, observation_space: gym.Space) -> hk.Transformed:
     """Makes Haiku transformed functions for autoencoders."""
     
     def ae_fn(x: chex.Array, a: chex.Array) -> chex.Array:
@@ -116,7 +116,8 @@ def make_ae_network(config: ConfigDict) -> hk.Transformed:
             network_cls = VAE
         else:
             network_cls = CondAE
-            
+        
+        config.observation_dim = observation_space.shape[0]
         network = network_cls(config)
         return network(x, a)
     
@@ -136,7 +137,7 @@ class AutoEncoderLearner(Learner):
     ):
         
         # initialize net function
-        ae = make_ae_network(config)
+        ae = make_ae_network(config, observation_space)
         
         # initialize parameters
         key = jax.random.PRNGKey(seed)

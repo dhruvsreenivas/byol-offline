@@ -39,6 +39,20 @@ class SimpleDynamicsState(NamedTuple):
     
     params: hk.Params
     opt_state: optax.OptState
+    
+    
+def make_simple_dynamics_network(
+    config: ConfigDict, observation_space: gym.Space
+) -> hk.Transformed:
+    """Makes the simple dynamics network function."""
+    
+    observation_dim = observation_space.shape[0]
+    def forward_fn(s: chex.Array, a: chex.Array):
+        model = MLPDynamicsModel(observation_dim, config.hidden_dim, act=config.activation)
+        return model(s, a)
+    
+    model = hk.without_apply_rng(hk.transform(forward_fn))
+    return model
 
     
 class SimpleDynamicsLearner(Learner):
@@ -54,8 +68,7 @@ class SimpleDynamicsLearner(Learner):
         
         assert config.model_type == "mlp_dynamics", "Haven't implemented more complicated models yet. Starting simple :)"
         
-        model_fn = lambda s, a: MLPDynamicsModel(config.observation_dim, config.hidden_dim, act="relu")(s, a)
-        model = hk.without_apply_rng(hk.transform(model_fn))
+        model = make_simple_dynamics_network(config, observation_space)
         
         # initialization
         key = jax.random.PRNGKey(seed)
