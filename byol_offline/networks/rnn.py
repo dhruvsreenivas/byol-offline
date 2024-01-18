@@ -4,9 +4,18 @@ import jax
 import jax.numpy as jnp
 import distrax
 from ml_collections import ConfigDict
-from typing import NamedTuple, Optional, Dict
+from typing import NamedTuple, Optional, Tuple, Union
 
 from byol_offline.types import RecurrentOutput
+
+RSSMState = Union[
+    Tuple[chex.Array, chex.Array, chex.Array],
+    Tuple[chex.Array, chex.Array, chex.Array, chex.Array],
+]
+
+RSSMStatistics = Union[chex.Array, Tuple[chex.Array, chex.Array]]
+RSSMFnOutput = Tuple[RSSMState, chex.Array]
+PosteriorInput = Tuple[chex.Array, chex.Array]
 
 
 class RSSMOutput(NamedTuple):
@@ -61,6 +70,7 @@ class RSSM(hk.Module):
     Similar to BYOL-Explore latent world model.
     """
     
+    
     def __init__(self, config: ConfigDict):
         super().__init__()
         
@@ -73,7 +83,7 @@ class RSSM(hk.Module):
         self._discrete = self._stoch_discrete_dim > 1
         
         self._pre_gru = hk.Sequential([
-            hk.Linear(config.gru_hidden_size, w_init=glorot_w_init), # no need for layernorm in dreamer
+            hk.Linear(config.gru_hidden_size, w_init=glorot_w_init),
             jax.nn.elu
         ])
         
@@ -95,8 +105,14 @@ class RSSM(hk.Module):
             hk.Linear(dist_dim, w_init=glorot_w_init)
         ])
         
-    def _init_state(self, batch_size: Optional[int]) -> Dict[str, jnp.ndarray]:
-        # going to be (dist_params (logit/mean, std), deter, stoch) -> dicts are not useful in jax when it comes to jax.lax.scan and indexing
+    
+    def _init_state(self, batch_size: Optional[int]) -> RSSMState:
+        """Returns the initial state of the RSSM as a tuple. Dicts aren't useful for this.
+        
+        In the caes of categorical distributions, we return [logits, deter, stoch].
+        In the case of Gaussian distribution, we return [mean, std, deter, stoch].
+        """
+        
         bs = batch_size if batch_size is not None else 1
         
         if self._discrete:
@@ -112,41 +128,75 @@ class RSSM(hk.Module):
                 jnp.zeros((bs, self._deter_dim)),
                 jnp.zeros((bs, self._stoch_dim))
             )
-                
-    def _get_feat(self, state: Dict[str, jnp.ndarray]):
+    
+    
+    def _get_feature(self, state: RSSMState) -> chex.Array:
+        """Gets the hidden latent state (combination of deterministic + stochastic parts)."""
+        
         deter = state[-2]
         stoch = state[-1]
-        stoch = jnp.reshape(stoch, stoch.shape[:-2] + (-1,)) # (stoch_dim, stoch_discrete_dim) -> (stoch_dim * stoch_discrete_dim)
+        
+        if self._discrete:
+            # need to flatten it in discrete case
+            stoch = jnp.reshape(stoch, stoch.shape[:-2] + (-1,))
+        
         return jnp.concatenate([deter, stoch], axis=-1)
 
-    def _get_dist_and_stats_tup(self, stats: jnp.ndarray):
+    
+    def _get_dist_and_stats(self, stats: chex.Array) -> Tuple[distrax.Distribution, RSSMStatistics]:
+        """Gets the latent distribution and statistics (e.g. logits that define categorical, mean/std of Gaussian)."""
+        
         if self._discrete:
             logits = jnp.reshape(stats, stats.shape[:-1] + (self._stoch_dim, self._stoch_discrete_dim))
             dist_class = distrax.straight_through_wrapper(distrax.OneHotCategorical)
-            dist = dist_class(logits=logits)
-            dist = distrax.Independent(dist, 1)
+            distribution = dist_class(logits=logits)
+            distribution = distrax.Independent(distribution, 1)
             
-            stats_tup = (logits,)
+            stats = (logits,)
         else:
             mean, std = jnp.split(stats, 2, -1)
             std = jax.nn.softplus(std) + 0.1
-            dist = distrax.MultivariateNormalDiag(mean, std)
+            distribution = distrax.MultivariateNormalDiag(mean, std)
             
-            stats_tup = (mean, std)
+            stats = (mean, std)
         
-        return dist, stats_tup
+        return distribution, stats
     
-    def _onestep_post(self, embed: chex.Array, action: chex.Array, state: chex.Array) -> RecurrentOutput:
-        new_state, _ = self._onestep_prior(action, state)
+    
+    def _onestep_prior(self, action: chex.Array, state: RSSMState) -> RSSMFnOutput:
+        """Does one step of the prior distribution."""
         
-        deter = new_state[-2]
-        de = jnp.concatenate([deter, embed], -1)
-        post_stats = self._post_mlp(de)
-        post_dist, stats_tup = self._get_dist_and_stats_tup(post_stats)
-        new_stoch = post_dist.sample(seed=hk.next_rng_key())
+        deter, stoch = state[-2:]
         
-        new_state = stats_tup + (deter, new_stoch)
-        return new_state, post_stats
+        sta = jnp.concatenate([stoch, action], axis=-1)
+        sta = self._pre_gru(sta)
+        
+        x, new_deter = self._gru(x, deter)
+        prior_stats = self._prior_mlp(x)
+
+        # now that we have the prior stats, we can grab the distribution and new state
+        prior_distribution, prior_stats = self._get_dist_and_stats(prior_stats)
+        new_stoch = prior_distribution.sample(seed=hk.next_rng_key())
+        
+        new_state = prior_stats + (new_deter, new_stoch)
+        return new_state, prior_stats
+    
+    
+    def _onestep_post(self, embed: chex.Array, action: chex.Array, state: RSSMState) -> RSSMFnOutput:
+        """Gets the posterior outputs of the RSSM."""
+        
+        prior_state, _ = self._onestep_prior(action, state)
+        
+        deter = prior_state[-2]
+        de = jnp.concatenate([deter, embed], axis=-1)
+        posterior_stats = self._post_mlp(de)
+        
+        posterior_distribution, posterior_stats = self._get_dist_and_stats(posterior_stats)
+        new_stoch = posterior_distribution.sample(seed=hk.next_rng_key())
+        
+        new_state = posterior_stats + (deter, new_stoch)
+        return new_state, posterior_stats
+    
     
     def __call__(
         self, embeds: chex.Array, actions: chex.Array, state: Optional[chex.Array] = None
@@ -156,44 +206,47 @@ class RSSM(hk.Module):
         B = embeds.shape[1]
         state = self._init_state(B) if state is None else state
         
-        # === scan fns ===
+        # --- scan fns ---
         
         # prior
-        def _prior_scan_fn(carry: chex.Array, act: chex.Array) -> RecurrentOutput:
+        def _prior_scan_fn(carry: RSSMState, action: chex.Array) -> RSSMFnOutput:
             state = carry
-            new_state, prior = self._onestep_prior(act, state)
+            new_state, prior = self._onestep_prior(action, state)
             return new_state, prior
         
-        def _prior_feature_scan_fn(carry: chex.Array, act: chex.Array) -> RecurrentOutput:
+        
+        def _prior_feature_scan_fn(carry: RSSMState, action: chex.Array) -> RSSMFnOutput:
             state = carry
-            new_state, _ = self._onestep_prior(act, state)
-            return new_state, new_state
+            new_state, _ = self._onestep_prior(action, state)
+            feature = self._get_feature(new_state)
+            return new_state, feature
+        
         
         # post
-        def _post_scan_fn(carry: chex.Array, inp: chex.Array) -> RecurrentOutput:
+        def _post_scan_fn(carry: RSSMState, embed_action: PosteriorInput) -> RSSMFnOutput:
             state = carry
-            emb, act = inp
-            new_state, post = self._onestep_post(emb, act, state)
+            embed, action = embed_action
+            
+            new_state, post = self._onestep_post(embed, action, state)
             return new_state, post
         
-        def _post_feature_scan_fn(carry: chex.Array, inp: chex.Array) -> RecurrentOutput:
-            state = carry
-            emb, act = inp
-            new_state, _ = self._onestep_post(emb, act, state)
-            feat = self._get_feat(new_state)
-            return new_state, feat
         
-        def _prior_feature_scan_fn(carry, act):
+        def _post_feature_scan_fn(carry: RSSMState, embed_action: PosteriorInput) -> RSSMFnOutput:
             state = carry
-            new_state, _ = self._onestep_prior(act, state)
-            feat = self._get_feat(new_state)
-            return new_state, feat
+            embed, action = embed_action
+            
+            new_state, _ = self._onestep_post(embed, action, state)
+            feature = self._get_feature(new_state)
+            return new_state, feature
+        
+        # --- run the scan ---
         
         init = state
         _, priors = hk.scan(_prior_scan_fn, init, actions)
         _, posts = hk.scan(_post_scan_fn, init, (embeds, actions))
-        _, post_features = hk.scan(_post_feature_scan_fn, init, (embeds, actions))
+        
         _, prior_features = hk.scan(_prior_feature_scan_fn, init, actions)
+        _, post_features = hk.scan(_post_feature_scan_fn, init, (embeds, actions))
         
         return RSSMOutput(
             priors=priors, posts=posts,

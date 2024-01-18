@@ -98,13 +98,14 @@ class ConvWorldModel(hk.Module):
         Only gets the deterministic part of the output, similar to BYOL-Explore.
         """
         
-        def _scan_fn(carry: chex.Array, action: chex.Array):
+        def _scan_fn(carry: chex.Array, action: chex.Array) -> Tuple[chex.Array, chex.Array]:
             state = carry
             new_state, _ = self._rssm._onestep_prior(action, state)
             return new_state, new_state[..., :self._rssm._deter_dim] # new feature, deter state
         
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
+    
     
     def _onestep_imagine(self, action: chex.Array, state: chex.Array) -> ImagineOutput:
         """Does one step of imagination by rolling out from the prior."""
@@ -114,6 +115,7 @@ class ConvWorldModel(hk.Module):
         reward_mean = self._reward_predictor(new_state)
         
         return img_mean, reward_mean
+    
     
     def _onestep_observe(self, observations: chex.Array, action: chex.Array, state: chex.Array) -> ObserveOutput:
         """Does one step of observation by rolling out from the posterior."""
