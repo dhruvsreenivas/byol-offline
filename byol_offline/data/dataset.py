@@ -368,7 +368,7 @@ class ReplayBuffer(Dataset):
         self._insert_index = (self._insert_index + 1) % self._capacity
         self._size = min(self._size + 1, self._capacity)
 
-    def get_iterator(self, queue_size: int = 2, sample_args: Mapping = {}) -> Generator[Batch, None, None]:
+    def get_iterator(self, queue_size: int = 2, sample_args: Mapping = {}) -> Generator[Union[Batch, SequenceBatch], None, None]:
         # queue_size = 2 should be ok for one GPU.
 
         queue = collections.deque()

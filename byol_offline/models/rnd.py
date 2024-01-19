@@ -8,8 +8,8 @@ import numpy as np
 from typing import NamedTuple, Tuple, Mapping
 from ml_collections import ConfigDict
 
-from byol_offline.data import Batch
 from byol_offline.base_learner import Learner
+from byol_offline.data import Batch, _preprocess
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.predictors import RNDPredictor
 from byol_offline.types import LossFnOutput, MetricsDict
@@ -215,6 +215,9 @@ class RNDLearner(Learner):
             """Computes RND uncertainty bonus."""
             
             del step
+            
+            # first preprocess the batch
+            batch = _preprocess(batch)
             
             online_output = rnd.apply(state.params, observations, actions)
             target_output = rnd.apply(state.target_params, observations, actions)

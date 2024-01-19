@@ -23,7 +23,7 @@ from byol_offline.wrappers import wrap_pixels
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string("project_name", "byol_offline_pixels", "WandB project name.")
+flags.DEFINE_string("project_name", "byol-offline-pixels", "WandB project name.")
 flags.DEFINE_string("env_name", "cheetah-run-v0", "Environment name.")
 flags.DEFINE_string(
     "dataset_level", "medium", "Dataset level (e.g. random, medium, expert, etc.)"
@@ -37,7 +37,7 @@ flags.DEFINE_boolean(
 flags.DEFINE_integer("seed", 69, "Random seed.")
 flags.DEFINE_integer("log_interval", 50, "Logging interval.")
 flags.DEFINE_integer("eval_interval", None, "How often to evaluate. Defaults to not evaluating.")
-flags.DEFINE_integer("batch_size", 256, "Batch size.")
+flags.DEFINE_integer("batch_size", 64, "Batch size.")
 flags.DEFINE_integer("sequence_length", 5, "Sequence length.")
 flags.DEFINE_integer("max_steps", 3000, "Number of training steps.")
 
@@ -52,6 +52,9 @@ flags.DEFINE_boolean("wandb", True, "Whether to use WandB logging.")
 flags.DEFINE_integer("save_interval", 1000, "How often to save.")
 flags.DEFINE_boolean(
     "checkpoint_model", False, "Whether to checkpoint model."
+)
+flags.DEFINE_boolean(
+    "resume_from_checkpoint", False, "Whether to resume from the latest checkpoint."
 )
 flags.DEFINE_integer("max_checkpoints", 10, "Maximum number of checkpoints to save.")
 
@@ -132,23 +135,38 @@ def main(_):
         config, FLAGS.seed, env.observation_space, env.action_space
     )
     
+    # if we are resuming from a checkpoint, we load in the latest one
+    if FLAGS.resume_from_checkpoint:
+        checkpoints = [
+            os.path.join(chkpt_dir, fn) for fn in os.listdir(chkpt_dir)
+        ]
+        if len(checkpoints) > 0:
+            latest_chkpt = max(checkpoints, key=os.path.getctime)
+            learner.load(latest_chkpt)
+            
+            checkpoint_num = int(latest_chkpt.split("_")[-1][:-4])
+    else:
+        checkpoint_num = 0
+    
     # now start training
     for i in tqdm.tqdm(
-        range(1, FLAGS.max_steps + 1),
+        range(1, FLAGS.max_steps + 1 - checkpoint_num),
         smoothing=0.1,
         disable=not FLAGS.tqdm,
     ):
         # grab a batch of sequences
         batch = next(ds_iterator)
         
+        # update the learner
         learner._state, metrics = learner._update(
             learner._state, batch, step=i
         )
         
+        # log
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
                 wandb.log({f"train/{k}": v}, step=i)
-                
+        
         # evaluate every so often
         if FLAGS.eval_interval is not None and i % FLAGS.eval_interval == 0:
             learner._state, posterior_images, prior_images = learner._eval(learner._state, batch)
@@ -187,8 +205,9 @@ def main(_):
                 oldest_chkpt = min(checkpoints, key=os.path.getctime)
                 os.remove(oldest_chkpt)
                 
-            checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i}.pkl")
+            checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i + checkpoint_num}.pkl")
             learner.save(checkpoint_path)
+        
             
     # save final checkpoint
     if FLAGS.checkpoint_model:

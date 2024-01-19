@@ -20,10 +20,10 @@ def get_config():
     
     config.pixel.rssm.dreamer = config.pixel.dreamer
     config.pixel.rssm.gru_hidden_size = 256
-    config.pixel.rssm.use_layer_norm = True
+    config.pixel.rssm.use_layer_norm = False
     config.pixel.rssm.stoch_dim = 64
     config.pixel.rssm.stoch_discrete_dim = 1
-    config.pixel.rssm.hidden_dim = 1024
+    config.pixel.rssm.hidden_dim = 256
     
     # reward MLP args
     config.pixel.reward_hidden_dims = (256, 256)

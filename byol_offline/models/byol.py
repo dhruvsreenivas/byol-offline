@@ -620,10 +620,10 @@ class BYOLLearner(Learner):
             dreamer_loss, metrics = dreamer_loss_fn(wm_params, batch, dreamer_key)
             
             # add BYOL loss to the 
-            metrics["byol"] = byol_loss
+            metrics["byol_loss"] = byol_loss
             
             total_loss = dreamer_loss + beta * byol_loss
-            metrics["total"] = total_loss
+            metrics["total_loss"] = total_loss
             return total_loss, metrics
         
         

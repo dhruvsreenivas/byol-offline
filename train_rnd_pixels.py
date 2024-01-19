@@ -21,7 +21,7 @@ from byol_offline.wrappers import wrap_pixels
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string("project_name", "rnd_offline_pixels", "WandB project name.")
+flags.DEFINE_string("project_name", "rnd-offline-pixels", "WandB project name.")
 flags.DEFINE_string("env_name", "cheetah-run-v0", "Environment name.")
 flags.DEFINE_string(
     "dataset_level", "medium", "Dataset level (e.g. random, medium, expert, etc.)"
@@ -138,6 +138,9 @@ def main(_):
         learner._state, metrics = learner._update(
             learner._state, batch, step=i
         )
+        
+        # delete batch to save memory
+        del batch
         
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
