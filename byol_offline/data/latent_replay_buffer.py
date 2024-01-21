@@ -123,22 +123,7 @@ class LatentReplayBuffer(Dataset):
         del batch_dict
         
         return batch
-    
-    
-    def get_iterator(self, queue_size: int = 2, sample_args: Mapping = {}) -> Generator[Batch, None, None]:
         
-        queue = collections.deque()
-        
-        def enqueue(n: int) -> None:
-            for _ in range(n):
-                data = self.sample(**sample_args)
-                queue.append(jax.device_put(data))
-
-        enqueue(queue_size)
-        while queue:
-            yield queue.popleft()
-            enqueue(1)
-            
     
     def save(self, path: str) -> None:
         """Saves the buffer's dataset dict to the requested path."""
