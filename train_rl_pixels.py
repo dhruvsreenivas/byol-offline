@@ -395,6 +395,12 @@ def main(_):
                 
             checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i}.pkl")
             agent.save(checkpoint_path)
+    
+        
+    # save final checkpoint
+    if FLAGS.checkpoint_agent:
+        final_checkpoint_path = os.path.join(chkpt_dir, "final_ckpt.pkl")
+        agent.save(final_checkpoint_path)
         
 
 if __name__ == "__main__":
