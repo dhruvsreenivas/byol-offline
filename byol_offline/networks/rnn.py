@@ -212,7 +212,7 @@ class RSSM(hk.Module):
         return new_state, prior_stats
     
     
-    def _onestep_post(self, embed: chex.Array, action: chex.Array, state: RSSMState) -> RSSMFnOutput:
+    def _onestep_posterior(self, embed: chex.Array, action: chex.Array, state: RSSMState) -> RSSMFnOutput:
         """Gets the posterior outputs of the RSSM."""
         
         prior_state, _ = self._onestep_prior(action, state)
@@ -261,7 +261,7 @@ class RSSM(hk.Module):
             state = carry
             embed, action = embed_action
             
-            new_state, posterior = self._onestep_post(embed, action, state)
+            new_state, posterior = self._onestep_posterior(embed, action, state)
             return new_state, posterior
         
         
@@ -269,7 +269,7 @@ class RSSM(hk.Module):
             state = carry
             embed, action = embed_action
             
-            new_state, _ = self._onestep_post(embed, action, state)
+            new_state, _ = self._onestep_posterior(embed, action, state)
             feature = self._get_feature(new_state)
             return new_state, feature
         

@@ -1,7 +1,4 @@
 from ml_collections import config_dict, ConfigDict
-from typing import Union, Sequence
-
-Shape = Union[int, Sequence[int]]
 
 def get_config():
     """Base config."""

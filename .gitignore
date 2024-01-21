@@ -1,5 +1,6 @@
 wandb/
 scripts/
 checkpoints/
+latent_buffers/
 *__pycache__*
 .DS_Store

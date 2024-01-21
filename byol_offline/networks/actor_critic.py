@@ -162,8 +162,8 @@ class SACActor(hk.Module):
             hk.Linear(2 * action_dim, w_init=initializer, b_init=jnp.zeros)
         ])
         
-    def __call__(self, obs: chex.Array) -> distrax.Distribution:
-        output = self._policy(obs)
+    def __call__(self, observation: chex.Array) -> distrax.Distribution:
+        output = self._policy(observation)
         
         mu, log_std = jnp.split(output, 2, axis=-1)
         log_std = MIN_LOG_STD + 0.5 * (MAX_LOG_STD - MIN_LOG_STD) * (log_std + 1)
@@ -200,8 +200,8 @@ class SACCritic(hk.Module):
             hk.Linear(1, w_init=initializer, b_init=jnp.zeros)
         ])
         
-    def __call__(self, obs: chex.Array, action: chex.Array) -> DoubleQOutputs:
-        obs_action = jnp.concatenate([obs, action], axis=-1)
+    def __call__(self, observation: chex.Array, action: chex.Array) -> DoubleQOutputs:
+        obs_action = jnp.concatenate([observation, action], axis=-1)
         
         q1 = self._q1(obs_action)
         q2 = self._q2(obs_action)
@@ -219,12 +219,12 @@ class BCActor(hk.Module):
         self._hidden_dim = hidden_dim
         self._action_dim = action_dim
         
-    def __call__(self, obs: chex.Array) -> distrax.Distribution:
+    def __call__(self, observation: chex.Array) -> distrax.Distribution:
         net = hk.nets.MLP(
             [self._hidden_dim, self._hidden_dim, 2 * self._action_dim],
             activation=jax.nn.relu
         )
-        out = net(obs)
+        out = net(observation)
         mean, log_std = jnp.split(out, 2, -1)
         std = jnp.exp(log_std)
         

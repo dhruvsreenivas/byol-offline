@@ -6,7 +6,7 @@ import optax
 import distrax
 import gym
 import numpy as np
-from typing import NamedTuple, Tuple, Mapping
+from typing import NamedTuple, Tuple, Mapping, Optional
 from ml_collections import ConfigDict
 
 from byol_offline.base_learner import ReinforcementLearner
@@ -41,19 +41,22 @@ def make_sac_networks(
     config: ConfigDict,
     observation_space: gym.Space,
     action_space: gym.Space,
+    representation_dim: Optional[int] = None,
 ) -> NetworkFns:
     """Make networks for SAC."""
     
     encoder_config = config.encoder
     
     def encoder_fn(observation: chex.Array) -> chex.Array:
-        if is_pixel_based(observation_space):
+        if is_pixel_based(observation_space) and representation_dim is None:
+            # we are dealing with convnets
             pixel_encoder_config = encoder_config.pixel
             if pixel_encoder_config.dreamer:
                 return DreamerEncoder(pixel_encoder_config.depth)(observation)
             else:
                 return DrQv2Encoder()(observation)
         else:
+            # in this case, we immediately just use fully-connected MLPs
             state_encoder_config = encoder_config.state
             encoder = hk.nets.MLP(
                 state_encoder_config.hidden_dims, activation=jax.nn.swish
@@ -88,14 +91,17 @@ class SACLearner(ReinforcementLearner):
     ):
         
         # set up networks
-        encoder, actor, critic = make_sac_networks(config, observation_space, action_space)
+        encoder, actor, critic = make_sac_networks(
+            config, observation_space, action_space, config.observation_repr_dim
+        )
         
         # initialization
         rng = jax.random.PRNGKey(seed)
         encoder_key, actor_key, critic_key, state_key = jax.random.split(rng, 4)
         representation_dim = (
-            config.encoder.state.hidden_dims[-1] if not is_pixel_based(observation_space)
-            else 20000 if config.encoder.pixel.type == "drqv2"
+            config.encoder.state.hidden_dims[-1]
+            if not (is_pixel_based(observation_space) and config.observation_repr_dim is None)
+            else 20000 if not config.encoder.pixel.dreamer
             else 4096
         )
         
@@ -105,10 +111,16 @@ class SACLearner(ReinforcementLearner):
             H, W, C, S = observations.shape
             observations = np.reshape(observations, (H, W, C * S))
         actions = action_space.sample()
-        representation_zeros = jnp.zeros((1, representation_dim))
         
-        encoder_params = encoder.init(encoder_key, observations)
-        actor_params = actor.init(actor_key, representation_zeros, jnp.zeros(1))
+        representation_zeros = jnp.zeros(representation_dim)
+        
+        if config.observation_repr_dim is not None:
+            encoder_representation_zeros = jnp.zeros(config.observation_repr_dim)
+            encoder_params = encoder.init(encoder_key, encoder_representation_zeros)
+        else:
+            encoder_params = encoder.init(encoder_key, observations)
+        
+        actor_params = actor.init(actor_key, representation_zeros)
         critic_params = target_critic_params = critic.init(
             critic_key, representation_zeros, actions
         )
@@ -145,6 +157,9 @@ class SACLearner(ReinforcementLearner):
         )
         
         # ----- hyperparameters -----
+        
+        cql_alpha = config.cql_alpha
+        cql_samples = config.cql_samples
         discount = config.discount
         ema = config.ema
         target_update_frequency = config.target_update_frequency
@@ -200,24 +215,24 @@ class SACLearner(ReinforcementLearner):
             (encoder_grads, actor_grads), metrics = grad_fn(state.encoder_params, state.actor_params, batch, update_key, step)
             
             # encoder update
-            enc_update, new_enc_opt_state = encoder_optimizer.update(encoder_grads, state.encoder_opt_state)
-            new_enc_params = optax.apply_updates(state.encoder_params, enc_update)
+            encoder_update, new_encoder_opt_state = encoder_optimizer.update(encoder_grads, state.encoder_opt_state)
+            new_encoder_params = optax.apply_updates(state.encoder_params, encoder_update)
             
             # actor update
-            act_update, new_act_opt_state = actor_optimizer.update(actor_grads, state.actor_opt_state)
-            new_actor_params = optax.apply_updates(state.actor_params, act_update)
+            actor_update, new_actor_opt_state = actor_optimizer.update(actor_grads, state.actor_opt_state)
+            new_actor_params = optax.apply_updates(state.actor_params, actor_update)
             
             # get new state
-            new_train_state = state._replace(
-                encoder_params=new_enc_params,
+            new_state = state._replace(
+                encoder_params=new_encoder_params,
                 actor_params=new_actor_params,
                 
-                encoder_opt_state=new_enc_opt_state,
-                actor_opt_state=new_act_opt_state,
+                encoder_opt_state=new_encoder_opt_state,
+                actor_opt_state=new_actor_opt_state,
                 
                 rng_key=key
             )
-            return new_train_state, metrics
+            return new_state, metrics
         
         # =================== AGENT LOSS/UPDATE FUNCTIONS ===================
         
@@ -232,13 +247,16 @@ class SACLearner(ReinforcementLearner):
         ) -> LossFnOutput:
             """Critic loss function."""
             
+            sample_key, cql_key = jax.random.split(key)
+            B = batch.observations.shape[0]
+            
             # encode observations
             features = encoder.apply(encoder_params, batch.observations)
             next_features = encoder.apply(encoder_params, batch.next_observations)
             
             # get the targets
             distribution = actor.apply(actor_params, next_features)
-            next_actions, next_log_probs = distribution.sample_and_log_prob(seed=key)
+            next_actions, next_log_probs = distribution.sample_and_log_prob(seed=sample_key)
             
             nq1, nq2 = critic.apply(target_critic_params, next_features, next_actions)
             nv = jnp.squeeze(jnp.minimum(nq1, nq2) - temperature * next_log_probs)
@@ -247,8 +265,31 @@ class SACLearner(ReinforcementLearner):
             # get the actual q values
             q1, q2 = critic.apply(critic_params, features, batch.actions)
             
-            q_loss = jnp.mean(jnp.square(q1 - target_q)) + jnp.mean(jnp.square(q2 - target_q))
-            return q_loss, {"critic_loss": q_loss}
+            # now add CQL component
+            expanded_actions = jnp.expand_dims(batch.actions, 0) # [1, B, action_dim]
+            tiled_actions = jnp.tile(expanded_actions, (cql_samples, 1, 1)) # [cql_samples, B, action_dim]
+            tiled_actions = jax.random.uniform(cql_key, shape=tiled_actions.shape, dtype=tiled_actions.dtype)
+            tiled_actions = jnp.concatenate([tiled_actions, expanded_actions], axis=0) # [cql_samples + 1, B, action_dim]
+            
+            expanded_features = jnp.expand_dims(features, 1) # [1, B, feature_dim]
+            tiled_features = jnp.tile(expanded_features, (cql_samples + 1, 1, 1)) # [cql_samples + 1, B, feature_dim]
+            
+            cql_q1, cql_q2 = critic.apply(critic_params, tiled_features, tiled_actions)
+            q1_penalty = jax.nn.logsumexp(cql_q1, axis=0)
+            q2_penalty = jax.nn.logsumexp(cql_q2, axis=0)
+            
+            # compute all losses
+            q1_loss = cql_alpha * (jnp.mean(q1_penalty) - q1[:B // 2]) + jnp.mean(jnp.square(q1 - target_q))
+            q2_loss = cql_alpha * (jnp.mean(q2_penalty) - q2[:B // 2]) + jnp.mean(jnp.square(q2 - target_q))
+            
+            # combine and return
+            q_loss = q1_loss + q2_loss
+            return q_loss, {
+                "critic_loss": q_loss,
+                "q1": jnp.mean(q1),
+                "q2": jnp.mean(q2),
+                "target_q": jnp.mean(target_q)
+            }
         
 
         def actor_loss(

@@ -129,7 +129,8 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 indx = self.np_random.integers(len(self), size=batch_size)
             else:
                 indx = self.np_random.randint(len(self), size=batch_size)
-
+                
+            # verify correctness here
             for i in range(batch_size):
                 while not self._is_correct_index[indx[i]]:
                     if hasattr(self.np_random, "integers"):
@@ -137,8 +138,9 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                     else:
                         indx[i] = self.np_random.randint(len(self))
         else:
-            raise NotImplementedError("not implemented if non-None indices are provided.")
+            raise NotImplementedError("Not implemented for non-None indices.")
 
+        
         if keys is None:
             keys = self._dataset_dict.keys()
         else:

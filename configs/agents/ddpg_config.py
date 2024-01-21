@@ -1,4 +1,4 @@
-from ml_collections import ConfigDict
+from ml_collections import config_dict, ConfigDict
 
 from configs.base_config import get_config as get_base_config
 
@@ -7,6 +7,10 @@ def get_config():
     """Gets config for DDPG training."""
     
     config = get_base_config()
+    
+    # ----- encoder representation things -----
+    
+    config.observation_repr_dim = config_dict.placeholder(int)
     
     # ----- encoder -----
     

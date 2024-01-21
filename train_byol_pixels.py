@@ -35,11 +35,11 @@ flags.DEFINE_boolean(
 )
 
 flags.DEFINE_integer("seed", 69, "Random seed.")
-flags.DEFINE_integer("log_interval", 50, "Logging interval.")
+flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", None, "How often to evaluate. Defaults to not evaluating.")
 flags.DEFINE_integer("batch_size", 64, "Batch size.")
 flags.DEFINE_integer("sequence_length", 5, "Sequence length.")
-flags.DEFINE_integer("max_steps", 3000, "Number of training steps.")
+flags.DEFINE_integer("max_steps", 30000, "Number of training steps.")
 
 flags.DEFINE_integer("image_size", 64, "Image size.")
 flags.DEFINE_integer("num_stack", 3, "Number of frames to stack.")
@@ -127,6 +127,7 @@ def main(_):
             pack_obs_and_next_obs=FLAGS.pack_obs_and_next_obs
         )
     )
+    ds.seed(FLAGS.seed)
     
     # instantiate learner
     config = FLAGS.config

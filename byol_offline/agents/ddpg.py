@@ -6,7 +6,7 @@ import optax
 import distrax
 import gym
 import numpy as np
-from typing import NamedTuple, Tuple, Mapping
+from typing import NamedTuple, Tuple, Mapping, Optional
 from ml_collections import ConfigDict
 
 from byol_offline.base_learner import ReinforcementLearner
@@ -39,13 +39,14 @@ def make_ddpg_networks(
     config: ConfigDict, 
     observation_space: gym.Space,
     action_space: gym.Space,
+    representation_dim: Optional[int] = None,
 ) -> NetworkFns:
     """Makes networks for DDPG."""
     
     encoder_config = config.encoder
     
     def encoder_fn(observation: chex.Array) -> chex.Array:
-        if is_pixel_based(observation_space):
+        if is_pixel_based(observation_space) and representation_dim is None:
             pixel_encoder_config = encoder_config.pixel
             if pixel_encoder_config.dreamer:
                 return DreamerEncoder(pixel_encoder_config.depth)(observation)
@@ -86,14 +87,17 @@ class DDPGLearner(ReinforcementLearner):
     ):
         
         # encoder (if we use BYOL-Explore reward, we can use Dreamer encoder for consistency)
-        encoder, actor, critic = make_ddpg_networks(config, observation_space, action_space)
+        encoder, actor, critic = make_ddpg_networks(
+            config, observation_space, action_space, config.observation_repr_dim
+        )
         
         # initialization
         key = jax.random.PRNGKey(seed)
         encoder_key, actor_key, critic_key, state_key = jax.random.split(key, 4)
         representation_dim = (
-            config.encoder.state.hidden_dims[-1] if not is_pixel_based(observation_space)
-            else 20000 if config.encoder.pixel.type == "drqv2"
+            config.encoder.state.hidden_dims[-1]
+            if not (is_pixel_based(observation_space) and config.observation_repr_dim is None)
+            else 20000 if config.encoder.pixel.dreamer
             else 4096
         )
         
@@ -103,10 +107,15 @@ class DDPGLearner(ReinforcementLearner):
             H, W, C, S = observations.shape
             observations = np.reshape(observations, (H, W, C * S))
         actions = action_space.sample()
-        representation_zeros = jnp.zeros((1, representation_dim))
+        representation_zeros = jnp.zeros(representation_dim)
         
         # params
-        encoder_params = encoder.init(encoder_key, observations)
+        if config.observation_repr_dim is not None:
+            encoder_representation_zeros = jnp.zeros(config.observation_repr_dim)
+            encoder_params = encoder.init(encoder_key, encoder_representation_zeros)
+        else:
+            encoder_params = encoder.init(encoder_key, observations)
+        
         actor_params = actor.init(actor_key, representation_zeros, jnp.zeros(1))
         critic_params = target_critic_params = critic.init(
             critic_key, representation_zeros, actions

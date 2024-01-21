@@ -14,14 +14,14 @@ from byol_offline.data import SequenceBatch, _preprocess
 from byol_offline.distributions import OneHotDistribution
 from byol_offline.networks.encoder import DrQv2Encoder, DreamerEncoder
 from byol_offline.networks.decoder import DrQv2Decoder, DreamerDecoder
-from byol_offline.networks.rnn import RSSM, RSSMState
+from byol_offline.networks.rnn import RSSM, RSSMState, PosteriorInput, RSSMFnOutput
 from byol_offline.networks.predictors import BYOLPredictor
 from byol_offline.models.byol_utils import *
 from byol_offline.types import ImagineOutput, ObserveOutput, MetricsDict, LossFnOutput
 
 from utils import seq_batched_like, is_pixel_based, broadcast_to_local_devices
 
-"""BYOL-Explore world model definition + trainer."""
+"""BYOL-Explore + Dreamer world model definition + trainer."""
 
 
 class BYOLState(NamedTuple):
@@ -92,6 +92,19 @@ class ConvWorldModel(hk.Module):
     
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
     
+    def _encode(self, observations: chex.Array) -> chex.Array:
+        """Encodes the observations."""
+        
+        observations = observations.astype(jnp.float32)
+        return self._encoder(observations)
+    
+    
+    def _decode(self, features: chex.Array) -> chex.Array:
+        """Decodes features. Assumes double batching (as the only time we do this is when computing uncertainty)."""
+        
+        return hk.BatchApply(self._decoder)(features)
+        
+    
     def _open_gru_rollout(self, actions: chex.Array, state: RSSMState) -> chex.Array:
         """
         Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at initial state `state`.
@@ -108,30 +121,40 @@ class ConvWorldModel(hk.Module):
         return deter_states
     
     
-    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> ImagineOutput:
-        """Does one step of imagination by rolling out from the prior."""
+    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> Tuple[RSSMState, ImagineOutput]:
+        """Does one step of imagination by rolling out from the prior.
+        
+        Returns:
+            new_state [RSSMState]: Resulting RSSM state.
+            new_feature [chex.Array]: Latent feature from RSSM state.
+            reward_mean [chex.Array]: Predicted reward distribution mean.
+        """
         
         new_state, _ = self._rssm._onestep_prior(action, state)
         new_feature = self._rssm._get_feature(new_state)
         
-        # run feature through decoders
-        img_mean = self._decoder(new_feature)
+        # run feature through only reward decoder
         reward_mean = self._reward_predictor(new_feature)
         
-        return img_mean, reward_mean
+        return new_state, (new_feature, reward_mean)
     
     
-    def _onestep_observe(self, observation: chex.Array, action: chex.Array, state: RSSMState) -> ObserveOutput:
-        """Does one step of observation by rolling out from the posterior."""
+    def _onestep_observe(self, emb: chex.Array, action: chex.Array, state: RSSMState) -> Tuple[RSSMState, ObserveOutput]:
+        """Does one step of observation by rolling out from the posterior. Assumes observation is a latent state.
         
-        emb = self._encoder(observation)
-        new_state, _ = self._rssm._onestep_post(emb, action, state)
+        Returns:
+            new_state [RSSMState]: Resulting RSSM state.
+            new_feature [chex.Array]: Latent feature.
+            reward_mean [chex.Array]: Predicted reward distribution mean.
+        """
+        
+        new_state, _ = self._rssm._onestep_posterior(emb, action, state)
         new_feature = self._rssm._get_feature(new_state)
         
-        img_mean = self._decoder(new_feature)
+        # run feature through reward decoder
         reward_mean = self._reward_predictor(new_feature)
         
-        return img_mean, reward_mean
+        return new_state, (new_feature, reward_mean)
     
     # ===== things used in training/to define loss function in trainer =====
     
@@ -164,6 +187,7 @@ class ConvWorldModel(hk.Module):
             post_observation_mean=post_img_mean, post_reward_mean=post_reward_mean, posts=rssm_output.posts,
             prior_observation_mean=prior_img_mean, prior_reward_mean=prior_reward_mean, priors=rssm_output.priors
         )
+
     
     def _byol_forward(self, observations: chex.Array, actions: chex.Array) -> BYOLOutput:
         """Full output for BYOL loss computation."""
@@ -178,13 +202,13 @@ class ConvWorldModel(hk.Module):
         
         # we first use the RSSM encoder to do one-step before doing open-loop rollouts
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_state, _ = self._rssm._onestep_post(embed, action, init_state) # h_0
+        first_state, _ = self._rssm._onestep_posterior(embed, action, init_state) # h_0
         
         first_deter = first_state[-2]
         latent = self._byol_predictor(first_deter)
         latent = jnp.expand_dims(latent, axis=0)
         
-        # === collect h_t, latents (BYOL stuff) through open loop rollout ===
+        # --- collect h_t, latents (BYOL stuff) through open loop rollout ---
         deter_states = self._open_gru_rollout(actions[1:], first_state)
         latents = self._byol_predictor(deter_states)
         pred_latents = jnp.concatenate([latent, latents], axis=0) # [T, B, embed_dim] for both pred_latents and embeds
@@ -193,7 +217,33 @@ class ConvWorldModel(hk.Module):
         return BYOLOutput(
             predicted_latents=pred_latents, target_embeddings=embeds
         )
+    
+    
+    def _process_to_latent(self, observations: chex.Array, actions: chex.Array) -> chex.Array:
+        """Processes the observations and actions to given features."""
         
+        observations = observations.astype(jnp.float32)
+        B = observations.shape[1]
+        
+        # first get embeddings
+        embeds = hk.BatchApply(self._encoder)(observations)
+        
+        # now we scan with posterior model across time axis
+        # this is the same as the RSSM posterior feature scan function
+        def _posterior_feature_scan_fn(carry: RSSMState, embed_action: PosteriorInput) -> RSSMFnOutput:
+            state = carry
+            embed, action = embed_action
+            
+            new_state, _ = self._rssm._onestep_posterior(embed, action, state)
+            new_feature = self._rssm._get_feature(new_state)
+            return new_state, new_feature
+        
+        init = self._rssm._init_state(B)
+        _, features = hk.scan(_posterior_feature_scan_fn, init, (embeds, actions))
+        
+        return features
+        
+    
     def __call__(self, observations: chex.Array, actions: chex.Array) -> WorldModelOutput:
         dreamer_out = self._dreamer_forward(observations, actions)
         byol_out = self._byol_forward(observations, actions)
@@ -231,6 +281,18 @@ class MLPWorldModel(hk.Module):
         
     # ===== eval functions (imagining/observing one step, many steps, etc...) =====
     
+    def _encode(self, observations: chex.Array) -> chex.Array:
+        """Encodes the observations."""
+        
+        return self._encoder(observations)
+    
+    
+    def _decode(self, features: chex.Array) -> chex.Array:
+        """Decodes features. Assumes double batching (as the only time we do this is when computing uncertainty)."""
+        
+        return hk.BatchApply(self._decoder)(features)
+        
+    
     def _open_gru_rollout(self, actions: chex.Array, state: RSSMState) -> chex.Array:
         """
         Rolls out the open GRU (in this case, the RSSM recurrent unit) over all actions, starting at init state `state`.
@@ -246,28 +308,41 @@ class MLPWorldModel(hk.Module):
         _, deter_states = hk.scan(_scan_fn, state, actions)
         return deter_states
     
-    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> ImagineOutput:
-        """Does one step of imagination by rolling out from the prior."""
+    
+    def _onestep_imagine(self, action: chex.Array, state: RSSMState) -> Tuple[RSSMState, ImagineOutput]:
+        """Does one step of imagination by rolling out from the prior.
+        
+        Returns:
+            new_state [RSSMState]: Resulting RSSM state.
+            new_feature [chex.Array]: Latent feature.
+            reward_mean [chex.Array]: Predicted reward distribution mean.
+        """
         
         new_state, _ = self._rssm._onestep_prior(action, state)
         new_feature = self._rssm._get_feature(new_state)
         
-        state_mean = self._decoder(new_feature)
+        # pass through reward decoder only
         reward_mean = self._reward_predictor(new_feature)
         
-        return state_mean, reward_mean
+        return new_state, (new_feature, reward_mean)
     
-    def _onestep_observe(self, observation: chex.Array, action: chex.Array, state: RSSMState) -> ObserveOutput:
-        """Does one step of observation by rolling out from the posterior."""
+    
+    def _onestep_observe(self, emb: chex.Array, action: chex.Array, state: RSSMState) -> Tuple[RSSMState, ObserveOutput]:
+        """Does one step of observation by rolling out from the posterior. Assumes observation is a latent state.
         
-        emb = self._encoder(observation)
-        new_state, _ = self._rssm._onestep_post(emb, action, state)
+        Returns:
+            new_state [RSSMState]: Resulting RSSM state.
+            new_feature [chex.Array]: Latent feature.
+            reward_mean [chex.Array]: Predicted reward distribution mean.
+        """
+        
+        new_state, _ = self._rssm._onestep_posterior(emb, action, state)
         new_feature = self._rssm._get_feature(new_state)
         
-        state_mean = self._decoder(new_feature)
+        # pass through reward decoder only
         reward_mean = self._reward_predictor(new_feature)
         
-        return state_mean, reward_mean
+        return new_state, (new_feature, reward_mean)
     
     # ===== forward passes used in training/to define loss function in trainer =====
     
@@ -293,6 +368,7 @@ class MLPWorldModel(hk.Module):
             prior_observation_mean=prior_state_mean, prior_reward_mean=prior_reward_mean, priors=rssm_output.priors
         )
     
+    
     def _byol_forward(self, observations: chex.Array, actions: chex.Array) -> BYOLOutput:
         """Forward pass to compute outputs for BYOL loss."""
         
@@ -302,10 +378,9 @@ class MLPWorldModel(hk.Module):
         B = observations.shape[1]
         embeds = hk.BatchApply(self._encoder)(observations)
         init_state = self._rssm._init_state(B)
-        init_feature = self._rssm._get_feature(init_state)
         
         embed, action = embeds[0], actions[0] # x_0, a_0
-        first_state, _ = self._rssm._onestep_post(embed, action, init_feature) # h_0
+        first_state, _ = self._rssm._onestep_posterior(embed, action, init_state) # h_0
         
         first_deter = first_state[-2]
         latent = self._byol_predictor(first_deter)
@@ -318,6 +393,31 @@ class MLPWorldModel(hk.Module):
         
         # return
         return BYOLOutput(predicted_latents=pred_latents, target_embeddings=embeds)
+    
+    
+    def _process_to_latent(self, observations: chex.Array, actions: chex.Array) -> chex.Array:
+        """Processes all (s, a) to latent features."""
+        
+        observations = observations.astype(jnp.float32)
+        B = observations.shape[1]
+        
+        # first get embeddings
+        embeds = hk.BatchApply(self._encoder)(observations)
+        
+        # now we scan with posterior model across time axis
+        # this is the same as the RSSM posterior feature scan function
+        def _posterior_feature_scan_fn(carry: RSSMState, embed_action: PosteriorInput) -> RSSMFnOutput:
+            state = carry
+            embed, action = embed_action
+            
+            new_state, _ = self._rssm._onestep_posterior(embed, action, state)
+            new_feature = self._rssm._get_feature(new_state)
+            return new_state, new_feature
+        
+        init = self._rssm._init_state(B)
+        _, features = hk.scan(_posterior_feature_scan_fn, init, (embeds, actions))
+        
+        return features
     
     
     def __call__(self, observations: chex.Array, actions: chex.Array) -> WorldModelOutput:
@@ -343,16 +443,35 @@ def make_byol_network(config: ConfigDict, observation_space: gym.Space) -> hk.Mu
             # same as standard forward pass
             return wm(x, a)
         
+        def init_state_fn(B: int) -> RSSMState:
+            return wm._rssm._init_state(B)
+        
+        def encode_fn(x: chex.Array) -> chex.Array:
+            return wm._encode(x)
+        
+        def decode_fn(x: chex.Array) -> chex.Array:
+            return wm._decode(x)
+        
         def dreamer_forward(x: chex.Array, a: chex.Array) -> DreamerOutput:
             return wm._dreamer_forward(x, a)
         
         def byol_forward(x: chex.Array, a: chex.Array) -> BYOLOutput:
             return wm._byol_forward(x, a)
         
-        def imagine_fn(a: chex.Array, s: chex.Array) -> ImagineOutput:
+        def observe_fn(x: chex.Array, a: chex.Array, s: RSSMState) -> Tuple[RSSMState, ObserveOutput]:
+            return wm._onestep_observe(x, a, s)
+        
+        def imagine_fn(a: chex.Array, s: RSSMState) -> Tuple[RSSMState, ImagineOutput]:
             return wm._onestep_imagine(a, s)
+        
+        def process_to_latent_fn(x: chex.Array, a: chex.Array) -> chex.Array:
+            return wm._process_to_latent(x, a)
             
-        return init, (dreamer_forward, byol_forward, imagine_fn)
+        return init, (
+            dreamer_forward, byol_forward,
+            encode_fn, decode_fn, observe_fn, imagine_fn,
+            init_state_fn, process_to_latent_fn
+        )
     
     wm = hk.multi_transform(wm_fn)
     return wm
@@ -420,7 +539,11 @@ class BYOLLearner(Learner):
         self._state = init_wm_fn(base_key)
         
         # hparams and functions to note
-        dreamer_forward, byol_forward, imagine = wm.apply
+        (
+            dreamer_forward, byol_forward,
+            encode, decode, observe, imagine,
+            initialize_state, process_to_latent
+        ) = wm.apply
         
         ema = config.ema
         vae_beta = config.vae_beta # trades off reconstruction and KL losses in Dreamer
@@ -457,7 +580,7 @@ class BYOLLearner(Learner):
         
         
         def _get_img_dist(mean: chex.Array) -> distrax.Distribution:
-            """Gets the Dreamer reconstruction distribution."""
+            """Gets the Dreamer observation reconstruction distribution."""
             
             distribution = distrax.Normal(mean, 1.0)
             distribution = distrax.Independent(distribution, 3)
@@ -470,24 +593,69 @@ class BYOLLearner(Learner):
             dist = distrax.Normal(mean, 1.0)
             return dist
         
-        # ----- define one-step imagine function -----
+        # ----- define one-step encode/decode + observe + imagine functions -----
         
-        def _imagine(
-            state: BYOLState, action: chex.Array, hidden_state: chex.Array
-        ) -> Tuple[BYOLState, ImagineOutput]:
-            """Does one imagine step in the environment."""
+        def _encode(state: BYOLState, observations: chex.Array) -> Tuple[BYOLState, chex.Array]:
+            """Encodes observations."""
             
-            forward_key, observation_key, reward_key, state_key = jax.random.split(state.rng_key, 4)
-            observation_mean, reward_mean = imagine(state.params, forward_key, action, hidden_state)
+            forward_key, new_state_key = jax.random.split(state.rng_key)
+            embeds = encode(state.params, forward_key, observations)
             
-            observation_distribution = _get_img_dist(observation_mean)
-            observation = observation_distribution.sample(seed=observation_key)
+            new_state = state._replace(rng_key=new_state_key)
+            return new_state, embeds
+        
+        
+        def _decode(state: BYOLState, features: chex.Array) -> Tuple[BYOLState, chex.Array]:
+            """Decodes features."""
+            
+            forward_key, new_state_key = jax.random.split(state.rng_key)
+            reconstructed_observations = decode(state.params, forward_key, features)
+            
+            new_state = state._replace(rng_key=new_state_key)
+            return new_state, reconstructed_observations
+
+        
+        def _observe(
+            state: BYOLState, embed: chex.Array, action: chex.Array,
+            hidden_state: RSSMState, sample: bool = False,
+        ) -> Tuple[BYOLState, Tuple[RSSMState, chex.Array, chex.Array]]:
+            """Does one observation step. Returns latent features and rewards."""
+            
+            forward_key, reward_key, state_key = jax.random.split(state.rng_key, 3)
+            new_hidden_state, (latent_feature, reward_mean) = observe(
+                state.params, forward_key, embed, action, hidden_state
+            )
             
             reward_distribution = _get_reward_dist(reward_mean)
-            reward = reward_distribution.sample(seed=reward_key)
+            reward = jnp.where(
+                sample,
+                reward_distribution.sample(seed=reward_key),
+                reward_distribution.mode()
+            )
             
             new_state = state._replace(rng_key=state_key)
-            return new_state, (observation, reward)
+            return new_state, (new_hidden_state, latent_feature, reward)
+        
+        
+        def _imagine(
+            state: BYOLState, action: chex.Array, hidden_state: RSSMState, sample: bool = False,
+        ) -> Tuple[BYOLState, Tuple[RSSMState, chex.Array, chex.Array]]:
+            """Does one imagine step in the environment. Returns latent features and rewards."""
+            
+            forward_key, reward_key, state_key = jax.random.split(state.rng_key, 3)
+            new_hidden_state, (latent_feature, reward_mean) = imagine(
+                state.params, forward_key, action, hidden_state
+            )
+            
+            reward_distribution = _get_reward_dist(reward_mean)
+            reward = jnp.where(
+                sample,
+                reward_distribution.sample(seed=reward_key),
+                reward_distribution.mode()
+            )
+            
+            new_state = state._replace(rng_key=state_key)
+            return new_state, (new_hidden_state, latent_feature, reward)
         
         # ----- define loss and update functions -----
     
@@ -504,11 +672,11 @@ class BYOLLearner(Learner):
 
             # don't need to do for all idxs that work, we just do it for index T - window_size so we don't multiple count the same losses
             starting_idx = T - window_size
-            obs_window = sliding_window(obs_seq, starting_idx, window_size) # (T, B, *obs_dims), everything except [T - window_size:] 0s, rolled to front
-            action_window = sliding_window(action_seq, starting_idx, window_size) # (T, B, action_dim), everything except [T - window_size:] 0s, rolled to front
+            obs_window = sliding_window(obs_seq, starting_idx, window_size) # [T, B, *obs_dims], everything except [T - window_size:] 0s, rolled to front
+            action_window = sliding_window(action_seq, starting_idx, window_size) # [T, B, action_dim], everything except [T - window_size:] 0s, rolled to front
             
             pred_latents, _ = byol_forward(wm_params, pred_key, obs_window, action_window)
-            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # (T * B, embed_dim)
+            pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # [T * B, embed_dim]
 
             _, target_latents = byol_forward(target_params, target_key, obs_window, action_window) # (T, B, embed_dim)
             target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
@@ -659,9 +827,10 @@ class BYOLLearner(Learner):
             
             return new_state, metrics
         
+        
         def compute_uncertainty(
-            state: BYOLState, obs_seq: chex.Array, action_seq: chex.Array
-        ) -> Tuple[chex.Array, BYOLState]:
+            state: BYOLState, batch: SequenceBatch,
+        ) -> Tuple[BYOLState, chex.Array]:
             """
             Computes transition uncertainties according to part (iv) in BYOL-Explore paper.
             
@@ -673,10 +842,36 @@ class BYOLLearner(Learner):
             
             # losses are of shape [T, B], result of only BYOL loss accumulation
             loss_key, new_state_key = jax.random.split(state.rng_key)
-            _, losses = byol_loss_fn(state.params, state.target_params, obs_seq, action_seq, loss_key)
+            _, losses = byol_loss_fn(state.params, state.target_params, batch, loss_key)
             
             new_state = state._replace(rng_key=new_state_key)
-            return jax.lax.stop_gradient(losses), new_state
+            return new_state, jax.lax.stop_gradient(losses)
+        
+        
+        def _initialize_state(state: BYOLState, batch_size: int) -> Tuple[BYOLState, RSSMState]:
+            """Initializes the model state."""
+            
+            forward_key, new_state_key = jax.random.split(state.rng_key)
+            init_state = initialize_state(state.params, forward_key, batch_size)
+            
+            new_state = state._replace(rng_key=new_state_key)
+            return new_state, init_state
+        
+        
+        def _process_to_latent(
+            state: BYOLState, obs_seq: chex.Array, action_seq: chex.Array
+        ) -> Tuple[BYOLState, chex.Array]:
+            """Processes the observations/actions to latent features."""
+
+            forward_key, new_state_key = jax.random.split(state.rng_key)
+            
+            # forward pass
+            features = process_to_latent(state.params, forward_key, obs_seq, action_seq)
+            
+            # change key
+            new_state = state._replace(rng_key=new_state_key)
+            
+            return new_state, features
         
         # ====== eval methods ======
         
@@ -712,6 +907,7 @@ class BYOLLearner(Learner):
             new_state = state._replace(rng_key=new_state_key)
             return new_state, jax.lax.stop_gradient(post_img_means), jax.lax.stop_gradient(prior_img_means)
         
+        
         # whether to parallelize across devices, make sure to have multiple devices here for this for better performance
         # only pmapping the update here because we don't need to do it for eval and uncertainty computation (as they are both evaluation protocols mainly)
         if config.pmap:
@@ -719,6 +915,14 @@ class BYOLLearner(Learner):
         else:
             self._update = jax.jit(update)
         
+        
         self._compute_uncertainty = jax.jit(compute_uncertainty)
+        
+        self._encode = jax.jit(_encode)
+        self._decode = jax.jit(_decode)
+        self._process_to_latent = jax.jit(_process_to_latent)
         self._eval = jax.jit(eval)
+        
+        self._initialize_state = _initialize_state # no need to JIT this
+        self._observe = jax.jit(_observe)
         self._imagine = jax.jit(_imagine)

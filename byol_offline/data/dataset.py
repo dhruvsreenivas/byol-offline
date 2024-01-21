@@ -173,9 +173,13 @@ def _batch_to_dict(batch: Batch, observation_key: Optional[str] = None) -> Datas
     
     for k in ["actions", "rewards", "dones", "masks"]:
         batch_dict[k] = getattr(batch, k)
-        
-    batch_dict["observations"] = {observation_key: batch.observations}
-    batch_dict["next_observations"] = {observation_key: batch.next_observations}
+    
+    if observation_key is not None:
+        batch_dict["observations"] = {observation_key: batch.observations}
+        batch_dict["next_observations"] = {observation_key: batch.next_observations}
+    else:
+        batch_dict["observations"] = batch.observations
+        batch_dict["next_observations"] = batch.next_observations
     
     return batch_dict
 
@@ -184,10 +188,6 @@ class Dataset(object):
     """Base dataset class."""
     
     def __init__(self, dataset_dict: DatasetDict, seed: Optional[int] = None, observation_key: Optional[str] = None):
-        
-        if len(dataset_dict.keys()) > 0:
-            for key in ["observations", "actions", "rewards", "next_observations", "dones", "masks"]:
-                assert key in dataset_dict, "Not an appropriate dataset dict."
         
         self._dataset_dict = dataset_dict
         self._len = _check_lengths(dataset_dict)
@@ -245,9 +245,6 @@ class Dataset(object):
             else:
                 batch_dict[k] = self._dataset_dict[k][indx]
                 
-        # print(jax.tree_util.tree_map(lambda x: x.shape, batch_dict))
-                
-        # group everything that is not [observations, actions, rewards, next_observations, dones, masks] into `extras`
         batch = _dict_to_batch(batch_dict, self._observation_key)
         del batch_dict
         
@@ -362,11 +359,13 @@ class ReplayBuffer(Dataset):
     def __len__(self) -> int:
         return self._size
 
+
     def insert(self, data_dict: DatasetDict) -> None:
         _insert_recursively(self._dataset_dict, data_dict, self._insert_index)
 
         self._insert_index = (self._insert_index + 1) % self._capacity
         self._size = min(self._size + 1, self._capacity)
+
 
     def get_iterator(self, queue_size: int = 2, sample_args: Mapping = {}) -> Generator[Union[Batch, SequenceBatch], None, None]:
         # queue_size = 2 should be ok for one GPU.

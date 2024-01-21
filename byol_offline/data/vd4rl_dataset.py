@@ -10,6 +10,7 @@ import gym
 import numpy as np
 
 from byol_offline.data import MemoryEfficientReplayBuffer
+from byol_offline.data.dataset import _stack_dicts, _dict_to_batch
 
 VD4RL_DIR = "~/.vd4rl"
 
@@ -113,8 +114,11 @@ class VD4RLDataset(MemoryEfficientReplayBuffer):
         dataset_dir = get_dataset_dir(env, dataset_level, dataset_path, image_size)
         dataset_dict = load_episodes(dataset_dir, keep_temporal_order=True)
         framestack = env.observation_space[pixel_keys[0]].shape[-1]
-
+        
+        # just keep episodes, so it's easy to sample from later
+        self._episodes = []
         for episode in dataset_dict.values():
+            curr_episode = []
             
             for i in range(episode["image"].shape[0]):
                 if not episode["is_first"][i]:
@@ -139,6 +143,9 @@ class VD4RLDataset(MemoryEfficientReplayBuffer):
                     )
                     self.insert(data_dict)
                     
+                    # add to current episode
+                    curr_episode.append(data_dict)
+                    
                     stacked_frames.append(episode["image"][i])
                 else:
                     stacked_frames = deque(maxlen=framestack)
@@ -146,3 +153,12 @@ class VD4RLDataset(MemoryEfficientReplayBuffer):
                     while len(stacked_frames) < framestack:
                         stacked_frames.append(episode["image"][i])
                         next_stacked_frames.append(episode["image"][i])
+
+            # now we stack the curr_episode into one big dict, and we're done
+            curr_episode = _stack_dicts(curr_episode, axis=0)
+            self._episodes.append(curr_episode)
+            
+        # convert dict to batch
+        self._episodes = [
+            _dict_to_batch(episode, observation_key="pixels") for episode in self._episodes
+        ]

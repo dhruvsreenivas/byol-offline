@@ -139,9 +139,6 @@ def main(_):
             learner._state, batch, step=i
         )
         
-        # delete batch to save memory
-        del batch
-        
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
                 wandb.log({f"train/{k}": v}, step=i)
