@@ -369,11 +369,13 @@ def main(_):
         replay_buffer.insert_trajectory(rollout_dict, real=False)
         
         # --- if logging time, we log ---
+        
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
                 wandb.log({f"train/{k}": v}, step=i)
         
         # --- evaluate every so often ---
+        
         if FLAGS.eval_interval is not None and i % FLAGS.eval_interval == 0:
             eval_metrics = evaluate_model_based(
                 eval_env, agent, model, FLAGS.eval_episodes,
@@ -383,6 +385,7 @@ def main(_):
                 wandb.log({f"evaluation/{k}": v}, step=i)
         
         # --- optionally save ---
+        
         if FLAGS.checkpoint_agent and i % FLAGS.save_interval == 0:
             checkpoints = [
                 os.path.join(chkpt_dir, fn) for fn in os.listdir(chkpt_dir)
@@ -397,7 +400,7 @@ def main(_):
             agent.save(checkpoint_path)
     
         
-    # save final checkpoint
+    # --- save final checkpoint ---
     if FLAGS.checkpoint_agent:
         final_checkpoint_path = os.path.join(chkpt_dir, "final_ckpt.pkl")
         agent.save(final_checkpoint_path)
