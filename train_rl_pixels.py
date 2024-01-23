@@ -50,7 +50,7 @@ flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
 flags.DEFINE_integer("eval_interval", None, "How often to evaluate. Defaults to not evaluating.")
 flags.DEFINE_integer("eval_episodes", 10, "Number of evaluation episodes.")
 flags.DEFINE_integer("batch_size", 64, "Batch size.")
-flags.DEFINE_integer("rollout_length", 5, "Number of timesteps to roll out.")
+flags.DEFINE_integer("rollout_length", 5, "Number of timesteps to roll out in world model.")
 flags.DEFINE_float("reward_penalty_coef", 0.0, "Reward penalty coefficient.")
 flags.DEFINE_integer("max_steps", 100_000, "Number of training steps.")
 flags.DEFINE_integer(
@@ -84,7 +84,8 @@ config_flags.DEFINE_config_file(
 config_flags.DEFINE_config_file(
     "byol_config",
     "configs/models/byol_config.py",
-    "File path to the world model hyperparameter configuration. Used only for initialization."
+    "File path to the world model hyperparameter configuration. Used only for initialization.",
+    lock_config=False,
 )
 
 PLANET_ACTION_REPEAT = {
@@ -103,7 +104,7 @@ def process_dataset_to_latents(
     """Process all observation data to latents, and return the resulting trajectories."""
     
     latent_trajectories = []
-    episodes = random.choices(ds._episodes, num_episodes) if num_episodes is not None else ds._episodes
+    episodes = random.choices(ds._episodes, k=num_episodes) if num_episodes is not None else ds._episodes
     for episode in episodes:
         
         # first preprocess the episode
@@ -158,7 +159,7 @@ def latent_rollout(
     masks = jnp.expand_dims(batch.masks, -1)
     features *= masks
     
-    # now because we cannot do a scan (assigning state is not allowed), we have to python for loop. REEE
+    # now because we cannot do a scan (assigning state is not good when JIT compiling), we have to python for loop. REEE
     trajectory = []
     for _ in range(sequence_length):
         
@@ -211,6 +212,7 @@ def latent_rollout(
 
     return batch
 
+
 def main(_):
     
     # first initialize wandb project
@@ -221,7 +223,7 @@ def main(_):
     )
     wandb.config.update(FLAGS)
     
-    if FLAGS.checkpoint_model:
+    if FLAGS.checkpoint_agent:
         chkpt_dir = os.path.join(
             "checkpoints", "byol-mbrl", FLAGS.env_name, FLAGS.dataset_level
         )
@@ -294,14 +296,19 @@ def main(_):
     buffer_dir = os.path.join(
         "latent_buffers", FLAGS.env_name
     )
-    buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}.pkl")
+    
+    buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}_populated.pkl")
+    populated_buffer_exists = os.path.exists(buffer_chkpt)
+    if not populated_buffer_exists:
+        buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}.pkl")
+    
     if FLAGS.load_buffer:
         replay_buffer.load(buffer_chkpt)
     else:
         latent_trajectories = process_dataset_to_latents(model, ds)
         for trajectory in latent_trajectories:
             replay_buffer.insert_trajectory(trajectory, real=True)
-            
+        
         # save buffer for future loading
         os.makedirs(buffer_dir, exist_ok=True)
         replay_buffer.save(buffer_chkpt)
@@ -314,21 +321,26 @@ def main(_):
         agent_config, FLAGS.seed, env.observation_space, env.action_space
     )
     
-    # populate buffer
-    for _ in tqdm.tqdm(
-        range(FLAGS.start_training // FLAGS.sequence_length),
-        smoothing=0.1,
-        disable=not FLAGS.tqdm,
-        desc="Buffer populating"
-    ):
-        batch = next(ds_iterator)
-        rollouts = latent_rollout(
-            agent, model, batch, FLAGS.sequence_length,
-            reward_penalty_coef=FLAGS.reward_penalty_coef
-        )
+    # populate buffer with random data
+    if not populated_buffer_exists:
+        for _ in tqdm.tqdm(
+            range(FLAGS.start_training // FLAGS.rollout_length),
+            smoothing=0.1,
+            disable=not FLAGS.tqdm,
+            desc="Buffer populating"
+        ):
+            batch = next(ds_iterator)
+            rollouts = latent_rollout(
+                agent, model, batch, FLAGS.rollout_length,
+                reward_penalty_coef=FLAGS.reward_penalty_coef
+            )
+            
+            rollout_dict = _batch_to_dict(rollouts)
+            replay_buffer.insert_batch_of_trajectories(rollout_dict, real=False)
         
-        rollout_dict = _batch_to_dict(rollouts)
-        replay_buffer.insert_trajectory(rollout_dict, real=False)
+        # now save the buffer
+        populated_buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}_populated.pkl")
+        replay_buffer.save(populated_buffer_chkpt)
     
     # now train the agent
     for i in tqdm.tqdm(
@@ -339,6 +351,7 @@ def main(_):
     ):
         
         # --- sample from buffer ---
+        
         real_batch = replay_buffer.sample(
             FLAGS.batch_size, from_real=True
         )
@@ -348,6 +361,7 @@ def main(_):
         combined_batch = combine_batches(real_batch, mb_batch)
         
         # --- update the learner ---
+        
         agent._state, metrics = agent._update(
             agent._state, combined_batch, step=i
         )
@@ -362,11 +376,11 @@ def main(_):
         # model-based
         batch = next(ds_iterator)
         rollouts = latent_rollout(
-            agent, model, batch, FLAGS.sequence_length,
+            agent, model, batch, FLAGS.rollout_length,
             reward_penalty_coef=FLAGS.reward_penalty_coef
         )
         rollout_dict = _batch_to_dict(rollouts)
-        replay_buffer.insert_trajectory(rollout_dict, real=False)
+        replay_buffer.insert_batch_of_trajectories(rollout_dict, real=False)
         
         # --- if logging time, we log ---
         

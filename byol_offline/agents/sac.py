@@ -271,7 +271,7 @@ class SACLearner(ReinforcementLearner):
             tiled_actions = jax.random.uniform(cql_key, shape=tiled_actions.shape, dtype=tiled_actions.dtype)
             tiled_actions = jnp.concatenate([tiled_actions, expanded_actions], axis=0) # [cql_samples + 1, B, action_dim]
             
-            expanded_features = jnp.expand_dims(features, 1) # [1, B, feature_dim]
+            expanded_features = jnp.expand_dims(features, 0) # [1, B, feature_dim]
             tiled_features = jnp.tile(expanded_features, (cql_samples + 1, 1, 1)) # [cql_samples + 1, B, feature_dim]
             
             cql_q1, cql_q2 = critic.apply(critic_params, tiled_features, tiled_actions)
@@ -279,8 +279,8 @@ class SACLearner(ReinforcementLearner):
             q2_penalty = jax.nn.logsumexp(cql_q2, axis=0)
             
             # compute all losses
-            q1_loss = cql_alpha * (jnp.mean(q1_penalty) - q1[:B // 2]) + jnp.mean(jnp.square(q1 - target_q))
-            q2_loss = cql_alpha * (jnp.mean(q2_penalty) - q2[:B // 2]) + jnp.mean(jnp.square(q2 - target_q))
+            q1_loss = cql_alpha * (q1_penalty.mean() - q1[:B // 2].mean()) + jnp.mean(jnp.square(q1 - target_q))
+            q2_loss = cql_alpha * (q2_penalty.mean() - q2[:B // 2].mean()) + jnp.mean(jnp.square(q2 - target_q))
             
             # combine and return
             q_loss = q1_loss + q2_loss
@@ -432,11 +432,12 @@ class SACLearner(ReinforcementLearner):
             new_target_critic_params = optax.incremental_update(
                 state.critic_params, state.target_critic_params, ema
             )
-            new_target_critic_params = jnp.where(
-                step % target_update_frequency == 0,
-                new_target_critic_params,
-                state.target_critic_params
+            new_target_critic_params = optax.periodic_update(
+                new_target_critic_params, state.target_critic_params,
+                step, target_update_frequency
             )
+            
+            # final update
             state = state._replace(
                 target_critic_params=new_target_critic_params,
                 rng_key=state_key

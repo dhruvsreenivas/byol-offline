@@ -590,8 +590,8 @@ class BYOLLearner(Learner):
         def _get_reward_dist(mean: jnp.ndarray) -> distrax.Distribution:
             """Gets the Dreamer reward distribution."""
             
-            dist = distrax.Normal(mean, 1.0)
-            return dist
+            distribution = distrax.Normal(mean, 1.0)
+            return distribution
         
         # ----- define one-step encode/decode + observe + imagine functions -----
         
@@ -678,19 +678,25 @@ class BYOLLearner(Learner):
             pred_latents, _ = byol_forward(wm_params, pred_key, obs_window, action_window)
             pred_latents = jnp.reshape(pred_latents, (-1,) + pred_latents.shape[2:]) # [T * B, embed_dim]
 
-            _, target_latents = byol_forward(target_params, target_key, obs_window, action_window) # (T, B, embed_dim)
-            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # (T * B, embed_dim)
+            _, target_latents = byol_forward(target_params, target_key, obs_window, action_window) # [T, B, embed_dim]
+            target_latents = jnp.reshape(target_latents, (-1,) + target_latents.shape[2:]) # [T * B, embed_dim]
 
             # normalize latents
             pred_latents = l2_normalize(pred_latents, axis=-1)
             target_latents = l2_normalize(target_latents, axis=-1)
 
             # take L2 loss and reshape for correctness in exploration bonus (BYOL loss)
-            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # (T * B, embed_dim)
-            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # (T, B, embed_dim)
-            mses = sliding_window(mses, 0, window_size) # zeros out losses we don't care about (i.e. past window size)
+            mses = jnp.square(pred_latents - jax.lax.stop_gradient(target_latents)) # [T * B, embed_dim]
+            mses = jnp.reshape(mses, (-1, B) + mses.shape[1:]) # [T, B, embed_dim]
+            
+            # zeros out losses we don't care about (i.e. past window size)
+            mses = sliding_window(mses, 0, window_size)
+            
+            # roll it to the correct position for appropriate summing
             mses = jnp.roll(mses, shift=starting_idx, axis=0)
-            byol_loss_vec = jnp.sum(mses, -1) # (T, B)
+            
+            # now sum
+            byol_loss_vec = jnp.sum(mses, axis=-1) # [T, B]
             
             byol_loss = jnp.mean(byol_loss_vec)
             return byol_loss, byol_loss_vec

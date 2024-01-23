@@ -12,7 +12,7 @@ def l2_normalize(x: chex.Array, axis: Optional[int] = None, epsilon: float=1e-12
 
 
 def sliding_window(arr: chex.Array, idx: int, window_size: int) -> chex.Array:
-    """Get the relevant mask for given array, starting at index, with specific window size."""
+    """Get the relevant mask for given array, starting at `idx`, with specific window size."""
     
     ndims = jnp.ndim(arr)
     mask = jnp.arange(arr.shape[0])

@@ -85,7 +85,16 @@ class LatentReplayBuffer(Dataset):
                 self.insert_real(item_dict)
             else:
                 self.insert_mb(item_dict)
+                
+                
+    def insert_batch_of_trajectories(self, data_dict: DatasetDict, real: bool = True) -> None:
+        num_trajs = data_dict["observations"].shape[0]
         
+        for i in range(num_trajs):
+            traj_dict = jax.tree_util.tree_map(
+                lambda x: x[i], data_dict
+            )
+            self.insert_trajectory(traj_dict, real=real)
         
     def sample(
         self,

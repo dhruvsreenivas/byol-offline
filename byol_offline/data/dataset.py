@@ -168,7 +168,6 @@ def _dict_to_batch(
 def _batch_to_dict(batch: Batch, observation_key: Optional[str] = None) -> DatasetDict:
     """Reverse of `_dict_to_batch`. Assumes returned dict only has one key."""
     
-    assert observation_key is not None
     batch_dict = dict()
     
     for k in ["actions", "rewards", "dones", "masks"]:

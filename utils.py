@@ -64,15 +64,18 @@ def evaluate_model_based(
         
         return observation
     
-    for i in range(num_episodes):
+    for _ in range(num_episodes):
         observation, done = env.reset(), False
-        observation = to_array(observation)
+        
+        observation = to_array(observation).squeeze()
+        observation = np.expand_dims(observation, axis=0) # to add batch dim, [1, 64, 64, 3]
         
         # get initial state of the model
         model._state, state = model._initialize_state(
             model._state, 1
         )
-        action = np.zeros_like(env.action_space.sample())
+        dummy_action = np.zeros_like(env.action_space.sample())
+        dummy_action = jnp.expand_dims(dummy_action, axis=0) # [1, action_dim]
         
         while not done:
             # first embed the observation
@@ -82,15 +85,18 @@ def evaluate_model_based(
             
             # now get the feature
             model._state, (state, feature, _) = model._observe(
-                model._state, embed, action, state
+                model._state, embed, dummy_action, state
             )
             
             # now run the policy
             agent._state, action = agent._act(
-                agent._state, feature, 0, eval=True
+                agent._state, feature, step=0, eval=True
             )
+            action = jnp.squeeze(action)
             
             # run the action in the real environment
             observation, _, done, _ = env.step(action)
+            observation = to_array(observation).squeeze()
+            observation = np.expand_dims(observation, axis=0) # to add batch dim, [1, 64, 64, 3]
             
     return {"return": np.mean(env.return_queue), "length": np.mean(env.length_queue)}
