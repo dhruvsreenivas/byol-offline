@@ -225,7 +225,7 @@ def main(_):
     
     if FLAGS.checkpoint_agent:
         chkpt_dir = os.path.join(
-            "checkpoints", "byol-mbrl", FLAGS.env_name, FLAGS.dataset_level
+            "checkpoints", "rl", FLAGS.env_name, FLAGS.dataset_level
         )
         os.makedirs(chkpt_dir, exist_ok=True)
         
@@ -294,13 +294,13 @@ def main(_):
     
     # process all real data and add to replay buffer if needed
     buffer_dir = os.path.join(
-        "latent_buffers", FLAGS.env_name
+        "latent_buffers", FLAGS.env_name, FLAGS.dataset_level
     )
     
-    buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}_populated.pkl")
+    buffer_chkpt = os.path.join(buffer_dir, "populated.pkl")
     populated_buffer_exists = os.path.exists(buffer_chkpt)
     if not populated_buffer_exists:
-        buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}.pkl")
+        buffer_chkpt = os.path.join(buffer_dir, f"base.pkl")
     
     if FLAGS.load_buffer:
         replay_buffer.load(buffer_chkpt)
@@ -321,6 +321,19 @@ def main(_):
         agent_config, FLAGS.seed, env.observation_space, env.action_space
     )
     
+    # if we are resuming from a checkpoint, we load in the latest one
+    if FLAGS.resume_from_checkpoint:
+        checkpoints = [
+            os.path.join(chkpt_dir, fn) for fn in os.listdir(chkpt_dir)
+        ]
+        if len(checkpoints) > 0:
+            latest_chkpt = max(checkpoints, key=os.path.getctime)
+            agent.load(latest_chkpt)
+            
+            checkpoint_num = int(latest_chkpt.split("_")[-1][:-4])
+    else:
+        checkpoint_num = 0
+    
     # populate buffer with random data
     if not populated_buffer_exists:
         for _ in tqdm.tqdm(
@@ -339,12 +352,12 @@ def main(_):
             replay_buffer.insert_batch_of_trajectories(rollout_dict, real=False)
         
         # now save the buffer
-        populated_buffer_chkpt = os.path.join(buffer_dir, f"{FLAGS.dataset_level}_populated.pkl")
+        populated_buffer_chkpt = os.path.join(buffer_dir, "populated.pkl")
         replay_buffer.save(populated_buffer_chkpt)
     
     # now train the agent
     for i in tqdm.tqdm(
-        range(1, FLAGS.max_steps + 1),
+        range(1, FLAGS.max_steps + 1 - checkpoint_num),
         smoothing=0.1,
         disable=not FLAGS.tqdm,
         desc="Offline RL",

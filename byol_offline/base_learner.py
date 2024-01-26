@@ -1,5 +1,6 @@
 import abc
 import chex
+import jax
 import dill
 from typing import Any, Tuple
 
@@ -18,14 +19,16 @@ class Learner(abc.ABC):
     def save(self, checkpoint_path: str) -> None:
         """Saves the model to the requested path."""
         
-        with open(checkpoint_path, "wb") as f:
-            dill.dump(self._state, f, protocol=2)
+        if jax.process_index() == 0:
+            with open(checkpoint_path, "wb") as f:
+                dill.dump(self._state, f, protocol=2)
             
     def load(self, checkpoint_path: str):
         """Loads the model from the requested path."""
         
-        with open(checkpoint_path, "rb") as f:
-            self._state = dill.load(f)
+        if jax.process_index() == 0:
+            with open(checkpoint_path, "rb") as f:
+                self._state = dill.load(f)
 
 
 class ReinforcementLearner(Learner):
