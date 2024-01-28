@@ -331,6 +331,7 @@ def main(_):
             agent.load(latest_chkpt)
             
             checkpoint_num = int(latest_chkpt.split("_")[-1][:-4])
+            print(f"*** Starting from checkpoint {checkpoint_num}. ***")
     else:
         checkpoint_num = 0
     
@@ -373,7 +374,7 @@ def main(_):
         )
         combined_batch = combine_batches(real_batch, mb_batch)
         
-        # --- update the learner ---
+        # --- update the agent ---
         
         agent._state, metrics = agent._update(
             agent._state, combined_batch, step=i
@@ -399,7 +400,7 @@ def main(_):
         
         if i % FLAGS.log_interval == 0:
             for k, v in metrics.items():
-                wandb.log({f"train/{k}": v}, step=i)
+                wandb.log({f"train/{k}": v}, step=i + checkpoint_num)
         
         # --- evaluate every so often ---
         
@@ -409,7 +410,7 @@ def main(_):
             )
             
             for k, v in eval_metrics.items():
-                wandb.log({f"evaluation/{k}": v}, step=i)
+                wandb.log({f"evaluation/{k}": v}, step=i + checkpoint_num)
         
         # --- optionally save ---
         
@@ -423,7 +424,7 @@ def main(_):
                 oldest_chkpt = min(checkpoints, key=os.path.getctime)
                 os.remove(oldest_chkpt)
                 
-            checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i}.pkl")
+            checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i + checkpoint_num}.pkl")
             agent.save(checkpoint_path)
     
         
