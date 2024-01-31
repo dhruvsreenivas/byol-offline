@@ -8,7 +8,7 @@ from byol_offline.types import DataType
 
 class WANDBVideo(gym.Wrapper):
     """WandB video wrapper."""
-    
+
     def __init__(
         self,
         env: gym.Env,
@@ -50,7 +50,6 @@ class WANDBVideo(gym.Wrapper):
         return obs
 
     def step(self, action: np.ndarray) -> Tuple[Any, float, bool, Mapping]:
-
         obs, reward, done, info = super().step(action)
         self._add_frame(obs)
 

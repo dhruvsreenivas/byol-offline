@@ -16,7 +16,6 @@ def wrap_pixels(
     camera_id: int = 0,
     pixel_keys: Tuple[str, ...] = ("pixels",),
 ) -> Tuple[gym.Env, Tuple[str, ...]]:
-    
     if action_repeat > 1:
         env = RepeatAction(env, action_repeat)
 

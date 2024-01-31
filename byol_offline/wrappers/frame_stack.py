@@ -7,7 +7,7 @@ from gym.spaces import Box
 
 class FrameStack(gym.Wrapper):
     """Frame stacking wrapper from RLPD repository."""
-    
+
     def __init__(self, env, num_stack: int, stacking_key: str = "pixels"):
         super().__init__(env)
         self._num_stack = num_stack

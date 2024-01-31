@@ -4,7 +4,7 @@ import numpy as np
 
 class RepeatAction(gym.Wrapper):
     """Action repeat wrapper."""
-    
+
     def __init__(self, env: gym.Env, action_repeat: int = 4):
         super().__init__(env)
         self._action_repeat = action_repeat

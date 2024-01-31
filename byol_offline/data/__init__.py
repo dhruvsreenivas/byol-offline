@@ -3,7 +3,7 @@ from byol_offline.data.dataset import (
     SequenceBatch,
     Dataset,
     ReplayBuffer,
-    _preprocess
+    _preprocess,
 )
 from byol_offline.data.memory_efficient_replay_buffer import MemoryEfficientReplayBuffer
 from byol_offline.data.latent_replay_buffer import LatentReplayBuffer

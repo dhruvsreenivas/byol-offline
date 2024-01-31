@@ -7,10 +7,10 @@ from byol_offline.data.dataset import Dataset
 
 class D4RLDataset(Dataset):
     """D4RL dataset."""
-    
+
     def __init__(self, env: gym.Env, clip_to_eps: bool = True, eps: float = 1e-5):
         dataset_dict = d4rl.qlearning_dataset(env)
-        
+
         if clip_to_eps:
             lim = 1 - eps
             dataset_dict["actions"] = np.clip(dataset_dict["actions"], -lim, lim)
@@ -32,10 +32,10 @@ class D4RLDataset(Dataset):
 
         dataset_dict["masks"] = 1.0 - dataset_dict["terminals"]
         del dataset_dict["terminals"]
-        
+
         for k, v in dataset_dict.items():
             dataset_dict[k] = v.astype(np.float32)
 
         dataset_dict["dones"] = dones
-        
+
         super().__init__(dataset_dict)

@@ -14,13 +14,13 @@ from byol_offline.data.dataset import (
     _batch_to_dict,
     _stack_dicts,
     Batch,
-    SequenceBatch
+    SequenceBatch,
 )
 
 
 class MemoryEfficientReplayBuffer(ReplayBuffer):
     """Memory efficient replay buffer for image observations."""
-    
+
     def __init__(
         self,
         observation_space: gym.Space,
@@ -39,7 +39,7 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 self._num_stack = pixel_obs_space.shape[-1]
             else:
                 assert self._num_stack == pixel_obs_space.shape[-1]
-            
+
             self._unstacked_dim_size = pixel_obs_space.shape[-2]
             low = pixel_obs_space.low[..., 0]
             high = pixel_obs_space.high[..., 0]
@@ -61,9 +61,8 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
             action_space,
             capacity,
             next_observation_space=next_observation_space,
-            observation_key=pixel_keys[0]
+            observation_key=pixel_keys[0],
         )
-
 
     def insert(self, data_dict: DatasetDict) -> None:
         if self._insert_index == 0 and self._capacity == len(self) and not self._first:
@@ -103,7 +102,6 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
             indx = (self._insert_index + i) % len(self)
             self._is_correct_index[indx] = False
 
-
     def sample(
         self,
         batch_size: int,
@@ -129,7 +127,7 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 indx = self.np_random.integers(len(self), size=batch_size)
             else:
                 indx = self.np_random.randint(len(self), size=batch_size)
-                
+
             # verify correctness here
             for i in range(batch_size):
                 while not self._is_correct_index[indx[i]]:
@@ -140,7 +138,6 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         else:
             raise NotImplementedError("Not implemented for non-None indices.")
 
-        
         if keys is None:
             keys = self._dataset_dict.keys()
         else:
@@ -156,10 +153,10 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         obs_keys = list(obs_keys)
         for pixel_key in self._pixel_keys:
             obs_keys.remove(pixel_key)
-            
+
         # convert all non-observation stuff back to dict
         batch = _batch_to_dict(batch, self._observation_key)
-        
+
         # add batch observations in
         batch["observations"] = {}
         batch["next_observations"] = {}
@@ -180,10 +177,10 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
             else:
                 batch["observations"][pixel_key] = obs_pixels[..., :-1]
                 batch["next_observations"][pixel_key] = obs_pixels[..., 1:]
-                
+
         batch = _dict_to_batch(batch, self._observation_key)
         return batch
-    
+
     def sample_sequences(
         self,
         batch_size: int,
@@ -191,39 +188,43 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         keys: Optional[Iterable[str]] = None,
         pack_obs_and_next_obs: bool = False,
     ) -> SequenceBatch:
-        
         if self._trajectory_info is None:
             self._trajectory_info = self._trajectory_boundaries_and_returns()
-            
+
         episode_starts, episode_ends, _ = self._trajectory_info
-        
+
         # now we have to find sequences which are long enough
         good_trajectory_indices = [
-            (s, e) for s, e in zip(episode_starts, episode_ends)
+            (s, e)
+            for s, e in zip(episode_starts, episode_ends)
             if e - s >= sequence_length
         ]
-        
+
         # now we choose good starting indices for each datapoint
         starting_indices = []
         for _ in range(batch_size):
-            s, e = random.choice(good_trajectory_indices) # e is exclusive, so max is e - sequence_length
+            s, e = random.choice(
+                good_trajectory_indices
+            )  # e is exclusive, so max is e - sequence_length
             L = e - s
-            offset = np.random.randint(0, L - sequence_length) if L > sequence_length else 0
+            offset = (
+                np.random.randint(0, L - sequence_length) if L > sequence_length else 0
+            )
             assert s + offset + sequence_length < e
-            
+
             starting_indices.append(s + offset)
-            
+
         if keys is None:
             keys = self._dataset_dict.keys()
         else:
             assert "observations" in keys
-            
+
         # ----- now sample all non-observation attrs -----
-        
+
         keys = list(keys)
         keys.remove("observations")
         keys.remove("next_observations")
-        
+
         obs_keys = self._dataset_dict["observations"].keys()
         obs_keys = list(obs_keys)
         for pixel_key in self._pixel_keys:
@@ -232,14 +233,14 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
         sequence_batch_dicts = []
         for starting_index in starting_indices:
             indx = np.arange(starting_index, starting_index + sequence_length)
-            
+
             batch_dict = dict()
             for k in keys:
                 if isinstance(self._dataset_dict[k], Mapping):
                     batch_dict[k] = _sample(self._dataset_dict[k], indx)
                 else:
                     batch_dict[k] = self._dataset_dict[k][indx]
-                    
+
             # now we have to add the observations back in
             batch_dict["observations"] = {}
             batch_dict["next_observations"] = {}
@@ -247,23 +248,25 @@ class MemoryEfficientReplayBuffer(ReplayBuffer):
                 batch_dict["observations"][k] = _sample(
                     self._dataset_dict["observations"][k], indx
                 )
-            
+
             for pixel_key in self._pixel_keys:
                 obs_pixels = self._dataset_dict["observations"][pixel_key]
                 obs_pixels = np.lib.stride_tricks.sliding_window_view(
                     obs_pixels, self._num_stack + 1, axis=0
                 )
                 obs_pixels = obs_pixels[indx - self._num_stack]
-                
+
                 if pack_obs_and_next_obs:
                     batch_dict["observations"][pixel_key] = obs_pixels
                 else:
                     batch_dict["observations"][pixel_key] = obs_pixels[..., :-1]
                     batch_dict["next_observations"][pixel_key] = obs_pixels[..., 1:]
-                    
+
             sequence_batch_dicts.append(batch_dict)
-        
+
         sequence_batch_dict = _stack_dicts(sequence_batch_dicts, axis=1)
         del sequence_batch_dicts
-        
-        return _dict_to_batch(sequence_batch_dict, self._observation_key, is_sequence=True)
+
+        return _dict_to_batch(
+            sequence_batch_dict, self._observation_key, is_sequence=True
+        )
