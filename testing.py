@@ -72,7 +72,7 @@ def rolling_window_test():
         x, x.shape[0] - window_size, window_size
     )  # this should be the masked array, but with last 5 elements rolled to the front
 
-    # acme window is of shape [T, B, *dims], where last 5 elements are the LAST elements in the list are rolled to the front
+    # our window is of shape [T, B, *dims], where last 5 elements are the LAST elements in the list are rolled to the front
     # this should be equal to the LAST element in the acme window
 
     assert acme_window.shape == (
