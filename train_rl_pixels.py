@@ -459,7 +459,11 @@ def main(_):
             checkpoint_path = os.path.join(chkpt_dir, f"ckpt_{i + checkpoint_num}.pkl")
             agent.save(checkpoint_path)
 
-    # --- save final checkpoint ---
+            # also save buffer of experience to use in later runs
+            populated_buffer_chkpt = os.path.join(buffer_dir, "populated.pkl")
+            replay_buffer.save(populated_buffer_chkpt)
+
+    # save final checkpoint
     if FLAGS.checkpoint_agent:
         final_checkpoint_path = os.path.join(chkpt_dir, "final_ckpt.pkl")
         agent.save(final_checkpoint_path)
